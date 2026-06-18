@@ -1,7 +1,8 @@
 import db from '../../database/connection.js';
 
 export async function commandPerfil(sock, remoteJid, sender) {
-    const jogador = db.prepare('SELECT * FROM jogadores WHERE jid = ?').get(sender);
+    // Garante que o JID seja buscado perfeitamente no simulador JSON
+    const jogador = db.prepare('select * from jogadores where jid = ?').get(sender);
 
     if (!jogador) {
         await sock.sendMessage(remoteJid, { 
@@ -10,7 +11,7 @@ export async function commandPerfil(sock, remoteJid, sender) {
         return;
     }
 
-    // Design Visual Limpo e Profissional no WhatsApp (Ocultando o JID do jogador)
+    // Design Visual Limpo e Profissional no WhatsApp
     const fichaVisual = 
         `🍊 *STATUS DO GUERREIRO* 🍊\n` +
         `━━━━━━━━━━━━━━━━━━━━━━\n` +
