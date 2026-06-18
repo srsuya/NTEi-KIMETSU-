@@ -1,5 +1,6 @@
 import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
 import pino from 'pino';
+import readline from 'readline';
 import { runMigrations } from './database/migrations/init.js';
 import { runShopMigrations } from './database/migrations/shop_init.js';
 import db from './database/connection.js';
@@ -9,6 +10,10 @@ import { commandPerfil } from './commands/rpg/perfil.js';
 import { authMiddleware } from './middleware/auth.js';
 import { commandLoja, commandComprar } from './commands/shop/shopCmds.js';
 import { commandAdminManager } from './commands/admin/adminCmds.js';
+
+// Interface para ler o número de telefone no terminal do Termux se necessário
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
 // 1. Inicializa todas as tabelas do banco de dados (Jogadores + Loja)
 runMigrations();
@@ -20,14 +25,32 @@ async function connectToWhatsApp() {
     
     const sock = makeWASocket.default({
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: true, // Faz o QR Code aparecer na tela do terminal quando ligar
+        printQRInTerminal: false, // Desativa o QR Code para usar o código por número
         auth: state
     });
+
+    // SISTEMA DE PAIRING CODE (CONEXÃO POR CÓDIGO)
+    if (!sock.authState.creds.registered) {
+        console.log("🍊 [Tangerina Bot] Configurando conexão por número...");
+        const phoneNumber = await question('Digite o número do bot (Ex: 5511999999999): ');
+        const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+        
+        setTimeout(async () => {
+            try {
+                let code = await sock.requestPairingCode(cleanNumber);
+                code = code?.match(/.{1,4}/g)?.join('-') || code;
+                console.log(`\n🔑 SEU CÓDIGO DE CONEXÃO: \x1b[32m${code}\x1b[0m\n`);
+                console.log("Abra seu WhatsApp -> Aparelhos Conectados -> Conectar com número de telefone e digite o código acima.\n");
+            } catch (err) {
+                console.error("Erro ao solicitar código de pareamento:", err);
+            }
+        }, 3000);
+    }
 
     // Salva as credenciais toda vez que o estado mudar
     sock.ev.on('creds.update', saveCreds);
 
-    // Gerencia a conexão (se cair, reconecta automaticamente)
+    // Gerencia a conexão (se caiu, reconecta automaticamente)
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
@@ -99,7 +122,7 @@ async function connectToWhatsApp() {
                 console.error("Erro crítico no recrutamento automático:", error);
                 await sock.sendMessage(remoteJid, { text: `❌ Ocorreu um erro interno ao processar sua ficha.` });
             }
-            return; // Encerra a execução aqui para esta mensagem
+            return; 
         }
 
         // ========================================================
