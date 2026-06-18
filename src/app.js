@@ -14,54 +14,54 @@ import { commandAdminManager } from './commands/admin/adminCmds.js';
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
-// Inicializa o banco em JSON leve que criamos
 runMigrations();
 runShopMigrations();
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-    
-    // CORREÇÃO DO IMPORT: Garante compatibilidade com a versão instalada
     const makeSocket = makeWASocket.default || makeWASocket;
 
     const sock = makeSocket({
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: false, // Desliga o QR code igual ao estilo do Akame
-        auth: state
+        printQRInTerminal: false,
+        auth: state,
+        // Adiciona configurações de navegador para o WhatsApp aceitar a conexão estável
+        browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
-
-    // Se não estiver conectado, pede o número no terminal igual ao Akame-bot
-    if (!sock.authState.creds.registered) {
-        console.log("\n🍊 [Tangerina-Bot] SISTEMA DE PAREAMENTO POR TEXTO 🍊\n");
-        let phoneNumber = await question('Digite o número do WhatsApp do Bot (Ex: 5511999999999): ');
-        phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
-
-        if (!phoneNumber) {
-            console.log("Número inválido! Reinicie o processo.");
-            process.exit(0);
-        }
-
-        await delay(3000);
-        try {
-            let code = await sock.requestPairingCode(phoneNumber);
-            code = code?.match(/.{1,4}/g)?.join('-') || code;
-            console.log(`\n🔑 SEU CÓDIGO DO WHATSAPP: \x1b[32m${code}\x1b[0m\n`);
-            console.log("Abra o WhatsApp -> Aparelhos Conectados -> Conectar com número, e digite o código acima!\n");
-        } catch (error) {
-            console.error("Erro ao gerar o código, tente novamente:", error);
-        }
-    }
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    // Sistema Inteligente de Código de Pareamento
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
+        
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('Conexão fechada. Reconectando...', shouldReconnect);
             if (shouldReconnect) connectToWhatsApp();
         } else if (connection === 'open') {
             console.log('🍊 Tangerina Bot conectado com sucesso no WhatsApp!');
+        }
+
+        // AGORA ELE ESPERA A CONEXÃO ESTABILIZAR ANTES DE PEDIR O CÓDIGO
+        if (!sock.authState.creds.registered && connection === 'connecting') {
+            // Pequeno atraso para dar tempo do servidor responder
+            await delay(6000);
+            
+            console.log("\n🍊 [Tangerina-Bot] SISTEMA DE PAREAMENTO POR TEXTO 🍊\n");
+            let phoneNumber = await question('Digite o número do WhatsApp do Bot (Ex: 5511999999999): ');
+            phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
+
+            if (phoneNumber) {
+                try {
+                    let code = await sock.requestPairingCode(phoneNumber);
+                    code = code?.match(/.{1,4}/g)?.join('-') || code;
+                    console.log(`\n🔑 SEU CÓDIGO DO WHATSAPP: \x1b[32m${code}\x1b[0m\n`);
+                    console.log("Abra o WhatsApp -> Aparelhos Conectados -> Conectar com número, e digite o código acima!\n");
+                } catch (error) {
+                    console.error("Erro ao gerar o código. Digite 'npm start' para tentar novamente.");
+                }
+            }
         }
     });
 
@@ -74,16 +74,13 @@ async function connectToWhatsApp() {
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
         const sender = msg.key.participant || remoteJid;
 
-        // GATILHO: IDENTIFICAÇÃO AUTOMÁTICA DE RECRUTAS
         if (text.includes('📃 Ficha de Recrutamento')) {
             try {
                 let jogadorExistente = await db.prepare('SELECT * FROM jogadores WHERE jid = ?').get(sender);
-                
                 if (jogadorExistente) {
                     await sock.sendMessage(remoteJid, { text: `⚠️ Você já possui um perfil cadastrado! Use /perfil` });
                     return;
                 }
-
                 const lines = text.split('\n');
                 const nickLinha = lines.find(l => l.toLowerCase().includes('nick:'));
                 const familiaLinha = lines.find(l => l.toLowerCase().includes('família:') || l.toLowerCase().includes('familia:'));
@@ -117,7 +114,6 @@ async function connectToWhatsApp() {
                                         `Digite */menu* para ver suas opções de jogo!`;
 
                 await sock.sendMessage(remoteJid, { text: mensagemSucesso });
-
             } catch (error) {
                 console.error("Erro crítico no recrutamento automático:", error);
                 await sock.sendMessage(remoteJid, { text: `❌ Ocorreu um erro interno ao processar sua ficha.` });
@@ -136,18 +132,9 @@ async function connectToWhatsApp() {
             });
         }
 
-        if (text === '/perfil') {
-            await commandPerfil(sock, remoteJid, sender);
-        }
-
-        if (text === '/loja') {
-            await commandLoja(sock, remoteJid, 'IENES');
-        }
-
-        if (text === '/lojafichas') {
-            await commandLoja(sock, remoteJid, 'FICHAS');
-        }
-
+        if (text === '/perfil') await commandPerfil(sock, remoteJid, sender);
+        if (text === '/loja') await commandLoja(sock, remoteJid, 'IENES');
+        if (text === '/lojafichas') await commandLoja(sock, remoteJid, 'FICHAS');
         if (text.startsWith('/comprar')) {
             const itemParaComprar = text.replace('/comprar', '').trim();
             await commandComprar(sock, remoteJid, sender, itemParaComprar);
@@ -155,12 +142,10 @@ async function connectToWhatsApp() {
 
         if (text.startsWith('/addienes') || text.startsWith('/addfichas') || text.startsWith('/setpatente')) {
             const { isAllowedAdminCmd } = await authMiddleware(sock, msg, remoteJid, sender);
-            
             if (!isAllowedAdminCmd) {
                 await sock.sendMessage(remoteJid, { text: '❌ Permissão negada. Comando restrito a administradores.' });
                 return;
             }
-            
             await commandAdminManager(sock, remoteJid, text);
         }
     });
