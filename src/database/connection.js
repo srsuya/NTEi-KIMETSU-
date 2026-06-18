@@ -14,22 +14,20 @@ if (!fs.existsSync(dbPath)) {
 const readData = () => JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
 const writeData = (data) => fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
 
-// Simulador dos comandos que o seu bot já usa (prepare, run, get)
 const db = {
     prepare: (sql) => {
-        const sqlClean = sql.toLowerCase().replace(/\s+/g, ' ');
-        
+        const sqlClean = sql.toLowerCase().replace(/\s+/g, ' ').trim();
+
         return {
             get: (...params) => {
                 const data = readData();
-                // Simula busca de jogador por JID ou ID_RPG
-                if (sqlClean.includes('select * from jogadores where jid = ?')) {
+                if (sqlClean.includes('from jogadores where jid = ?') || sqlClean.includes('from jogadores where jid=?')) {
                     return data.jogadores.find(j => j.jid === params[0]) || null;
                 }
-                if (sqlClean.includes('select * from jogadores where id_rpg = ?')) {
+                if (sqlClean.includes('from jogadores where id_rpg = ?')) {
                     return data.jogadores.find(j => j.id_rpg == params[0]) || null;
                 }
-                if (sqlClean.includes('select max(id_rpg)')) {
+                if (sqlClean.includes('max(id_rpg)')) {
                     if (data.jogadores.length === 0) return { id: 1000 };
                     const maxId = Math.max(...data.jogadores.map(j => j.id_rpg || 1000));
                     return { id: maxId };
@@ -38,7 +36,6 @@ const db = {
             },
             run: (...params) => {
                 const data = readData();
-                // Simula a inserção de novos jogadores
                 if (sqlClean.includes('insert into jogadores')) {
                     const novoJogador = {
                         jid: params[0], id_rpg: params[1], nick: params[2],
@@ -49,8 +46,7 @@ const db = {
                     writeData(data);
                     return { changes: 1 };
                 }
-                // Simula atualizações de dados
-                if (sqlClean.includes('update jogadores set patente = ? where id_rpg = ?')) {
+                if (sqlClean.includes('update jogadores set patente = ?')) {
                     const jog = data.jogadores.find(j => j.id_rpg == params[1]);
                     if (jog) { jog.patente = params[0]; writeData(data); return { changes: 1 }; }
                 }
@@ -65,13 +61,8 @@ const db = {
             }
         };
     },
-    exec: (sql) => {
-        // Desativa a necessidade das migrations pesadas do SQLite
-        return Promise.resolve();
-    },
-    transaction: (fn) => {
-        return () => fn();
-    }
+    exec: (sql) => Promise.resolve(),
+    transaction: (fn) => () => fn()
 };
 
 export default db;
