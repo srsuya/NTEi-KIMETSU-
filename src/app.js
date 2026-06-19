@@ -1,4 +1,4 @@
-import makeWASocket, { useMultiFileAuthState, DisconnectReason, delay } from '@whiskeysockets/baileys';
+import makeWASocket, { useMultiFileAuthState, DisconnectReason, delay, Browsers } from '@whiskeysockets/baileys'; // AJUSTADO: Importou o Browsers
 import pino from 'pino';
 import readline from 'readline';
 import { runMigrations } from './database/migrations/init.js';
@@ -25,17 +25,16 @@ async function connectToWhatsApp() {
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false, // Desativa QR code para usar o pareamento por texto
         auth: state,
-        browser: ["Ubuntu", "Chrome", "20.0.04"]
+        browser: Browsers.ubuntu('Chrome') // CORREÇÃO CRÍTICA: Corrigido para o padrão aceito pelo WhatsApp
     });
 
     // Salva as credenciais sempre que atualizadas
     sock.ev.on('creds.update', saveCreds);
 
-    // SISTEMA DE PAREAMENTO SEQUENCIAL COM ESPERA DE CONEXÃO AJUSTADA
+    // SISTEMA DE PAREAMENTO SEQUENCIAL (AJUSTADO PARA DAR TEMPO DE CONECTAR)
     if (!sock.authState.creds.registered) {
         console.log("\n🍊 [Tangerina-Bot] AGUARDANDO CONEXÃO ESTABILIZAR... (10s) 🍊\n");
-        // Dá 10 segundos para o socket abrir os canais de conexão antes de pedir o código
-        await delay(10000); 
+        await delay(10000); // Dá 10 segundos para abrir os canais antes de pedir o código
         
         console.log("🍊 [Tangerina-Bot] SISTEMA DE PAREAMENTO POR TEXTO 🍊\n");
         let phoneNumber = await question('Digite o número do WhatsApp do Bot (Ex: 5511999999999): ');
@@ -43,7 +42,7 @@ async function connectToWhatsApp() {
 
         if (phoneNumber) {
             try {
-                await delay(2000); // Folga final de segurança
+                await delay(2000); // Margem de segurança final
                 let code = await sock.requestPairingCode(phoneNumber);
                 code = code?.match(/.{1,4}/g)?.join('-') || code;
                 console.log(`\n🔑 SEU CÓDIGO DO WHATSAPP: \x1b[32m${code}\x1b[0m\n`);
@@ -80,7 +79,7 @@ async function connectToWhatsApp() {
         const sender = msg.key.participant || remoteJid;
 
         // SISTEMA DE RECRUTAMENTO AUTOMÁTICO
-        if (text.includes('Ficha de Recrutamento')) {
+        if (text.includes('📃 Ficha de Recrutamento')) {
             try {
                 let SampleCheck = await db.prepare('SELECT * FROM jogadores WHERE jid = ?').get(sender);
                 if (SampleCheck) {
