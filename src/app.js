@@ -31,16 +31,19 @@ async function connectToWhatsApp() {
     // Salva as credenciais sempre que atualizadas
     sock.ev.on('creds.update', saveCreds);
 
-    // SISTEMA DE PAREAMENTO SEQUENCIAL (IGUAL AO MODELO ENVIADO)
+    // SISTEMA DE PAREAMENTO SEQUENCIAL COM ESPERA DE CONEXÃO AJUSTADA
     if (!sock.authState.creds.registered) {
-        console.log("\n🍊 [Tangerina-Bot] SISTEMA DE PAREAMENTO POR TEXTO 🍊\n");
-        await delay(2000); // Pequeno tempo para o socket respirar
+        console.log("\n🍊 [Tangerina-Bot] AGUARDANDO CONEXÃO ESTABILIZAR... (10s) 🍊\n");
+        // Dá 10 segundos para o socket abrir os canais de conexão antes de pedir o código
+        await delay(10000); 
         
+        console.log("🍊 [Tangerina-Bot] SISTEMA DE PAREAMENTO POR TEXTO 🍊\n");
         let phoneNumber = await question('Digite o número do WhatsApp do Bot (Ex: 5511999999999): ');
         phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
 
         if (phoneNumber) {
             try {
+                await delay(2000); // Folga final de segurança
                 let code = await sock.requestPairingCode(phoneNumber);
                 code = code?.match(/.{1,4}/g)?.join('-') || code;
                 console.log(`\n🔑 SEU CÓDIGO DO WHATSAPP: \x1b[32m${code}\x1b[0m\n`);
@@ -77,7 +80,7 @@ async function connectToWhatsApp() {
         const sender = msg.key.participant || remoteJid;
 
         // SISTEMA DE RECRUTAMENTO AUTOMÁTICO
-        if (text.includes('📃 Ficha de Recrutamento')) {
+        if (text.includes('Ficha de Recrutamento')) {
             try {
                 let SampleCheck = await db.prepare('SELECT * FROM jogadores WHERE jid = ?').get(sender);
                 if (SampleCheck) {
