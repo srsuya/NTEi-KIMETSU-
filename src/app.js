@@ -1,55 +1,49 @@
 // ══════════════════════════════════════════════════════════════════════════
-//   🍊 TANGERINA BOT RPG -(NTEi) 🍊
+//   🍊 TANGERINA BOT RPG -  (NTEi) 🍊
 // ══════════════════════════════════════════════════════════════════════════
 
 import makeWASocket, { useMultiFileAuthState, DisconnectReason, Browsers } from '@whiskeysockets/baileys';
 import pino from 'pino';
-import Database from 'better-sqlite3';
+import fs from 'fs';
 
-// Inicialização do Banco de Dados SQLite (Persistência por ID)
-const db = new Database('./ntei_rpg.db');
+// Caminhos dos arquivos de banco de dados JSON
+const DB_PATH = './ntei_rpg.json';
+const LOJA_PATH = './loja_config.json';
 
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS jogadores (
-    id_rpg INTEGER PRIMARY KEY AUTOINCREMENT,
-    jid TEXT UNIQUE,
-    nick TEXT,
-    raca TEXT DEFAULT '❓ Indefinida',
-    patente TEXT DEFAULT '⏺️ Cidadão',
-    familia TEXT DEFAULT 'Nenhuma',
-    organizacao TEXT DEFAULT 'Caçadores',
-    ienes INTEGER DEFAULT 0,
-    engrenagens INTEGER DEFAULT 0,
-    fichas INTEGER DEFAULT 0,
-    nivel_rpg INTEGER DEFAULT 1,
-    xp INTEGER DEFAULT 0
-  )
-`).run();
+// Inicialização e Carga dos Bancos JSON de forma segura
+function carregarDB() {
+  if (!fs.existsSync(DB_PATH)) {
+    const inicial = { proximoId: 1003, jogadores: {}, inventarios: {} };
+    fs.writeFileSync(DB_PATH, JSON.stringify(inicial, null, 2));
+  }
+  return JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
+}
 
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS inventarios (
-    jid TEXT PRIMARY KEY,
-    texto TEXT
-  )
-`).run();
+function salvarDB(dados) {
+  fs.writeFileSync(DB_PATH, JSON.stringify(dados, null, 2));
+}
 
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS configuracao_loja (
-    chave TEXT PRIMARY KEY,
-    conteudo TEXT
-  )
-`).run();
+function carregarLoja() {
+  if (!fs.existsSync(LOJA_PATH)) {
+    const inicial = { loja_fichas: "" };
+    fs.writeFileSync(LOJA_PATH, JSON.stringify(inicial, null, 2));
+  }
+  return JSON.parse(fs.readFileSync(LOJA_PATH, 'utf-8'));
+}
+
+function salvarLoja(dados) {
+  fs.writeFileSync(LOJA_PATH, JSON.stringify(dados, null, 2));
+}
 
 // Configurações Globais de Credenciais e Constantes
 const CONFIG = {
   prefixo: '/',
   senhaAdmin: 'admin@2626',
   senhaNtei: 'ntei@3010',
-  ownerJid: '5511999999999@s.whatsapp.net' // Número do Fundador/Dono
+  ownerJid: '5511999999999@s.whatsapp.net'
 };
 
-// Estados de Autenticação Temporária de Sessão por Chat (Controle de Senhas)
-const sessoesAutenticadas = new Map(); // Guarda se o JID obteve nível 'admin' ou 'ntei'
+const sessoesAutenticadas = new Map();
 
 function getNivelChat(sender) {
   if (sender === CONFIG.ownerJid) return 'ntei';
@@ -58,12 +52,47 @@ function getNivelChat(sender) {
 
 const fmt = (n) => Number(n).toLocaleString('pt-BR');
 
-// Helper para capturar campos de fichas enviadas por texto
 function capturarCampoFicha(linhas, termo) {
   const linha = linhas.find(l => l.toLowerCase().includes(termo.toLowerCase()));
   if (!linha) return null;
   const match = linha.match(/⌊\s*([^⌉]+)\s*⌉/);
   return match ? match[1].trim() : null;
+}
+
+// Encontra ou cria perfil de jogador baseado no JID
+function obterOuCriarJogador(jid, nomePadrao) {
+  const db = carregarDB();
+  if (!db.jogadores[jid]) {
+    const novoId = db.proximoId;
+    db.proximoId += 1;
+    db.jogadores[jid] = {
+      id_rpg: novoId,
+      jid: jid,
+      nick: nomePadrao,
+      raca: '❓ Indefinida',
+      patente: '⏺️ Cidadão',
+      familia: 'Nenhuma',
+      organizacao: 'Caçadores',
+      ienes: 0,
+      engrenagens: 0,
+      nivel_rpg: 1
+    };
+    salvarDB(db);
+  }
+  return db.jogadores[jid];
+}
+
+// Atualiza dados de um jogador específico
+function atualizarJogador(jid, dadosAtualizados) {
+  const db = carregarDB();
+  db.jogadores[jid] = { ...db.jogadores[jid], ...dadosAtualizados };
+  salvarDB(db);
+}
+
+// Busca jogador por ID Numérico do RPG
+function buscarJogadorPorId(idNum) {
+  const db = carregarDB();
+  return Object.values(db.jogadores).find(p => p.id_rpg === parseInt(idNum));
 }
 
 // ══════════════════════════════════════════
@@ -86,20 +115,13 @@ async function gerenciarMensagem(sock, msg) {
     const nacao = capturarCampoFicha(linhas, 'Nação:') || 'Aldeia do Norte';
     const recrutador = capturarCampoFicha(linhas, 'Recrutador:') || 'Sistema';
 
-    let jogador = db.prepare('SELECT * FROM jogadores WHERE jid = ?').get(sender);
-    if (!jogador) {
-      const stmt = db.prepare(`
-        INSERT INTO jogadores (jid, nick, familia, organizacao, raca) 
-        VALUES (?, ?, ?, 'Caçadores', '❓ Indefinida')
-      `);
-      const info = stmt.run(sender, nick, familia);
-      const novoId = 1000 + info.lastInsertRowid;
-      db.prepare('UPDATE jogadores SET id_rpg = ? WHERE jid = ?').run(novoId, sender);
-      jogador = db.prepare('SELECT * FROM jogadores WHERE jid = ?').get(sender);
-    }
+    let jogador = obterOuCriarJogador(sender, nick);
+    jogador.nick = nick;
+    jogador.familia = familia;
+    atualizarJogador(sender, jogador);
 
-    const fichaAprovada = `➖᭄⎝ᯌ •➖• ஜ •⸨🏙️⸩• ஜ •➖• ᯌ⎞➖᭄
-     🤺 ᗂ ⛩️ Kimetsu New Age ⛩️ ᗃ 🤺
+    const fichaAprovada = ` Bradley ➖᭄⎝ᯌ •➖• ஜ •⸨🏙️⸩• ஜ •➖• ᯌ⎞➖᭄
+ 🤺 ᗂ ⛩️ Kimetsu New Age ⛩️ ᗃ 🤺
 
 📃 RECRUTAMENTO APROVADO! 📃
 _￫🆔◈ ID:  ⌊ ${jogador.id_rpg} ⌉_
@@ -116,28 +138,20 @@ Use */escolher raça Humano* ou */escolher raça Oni* para definir sua raça!`;
     return sock.sendMessage(jid, { text: fichaAprovada, mentions: [sender] });
   }
 
-  // Verificação de Prefixo para comandos comuns
   if (!body.startsWith(CONFIG.prefixo)) return;
   const args = body.slice(1).trim().split(/\s+/);
   const cmd = args[0].toLowerCase();
   const resto = args.slice(1);
   const nivelAtuais = getNivelChat(sender);
 
-  // Auto-registro básico caso mande comando sem ficha
-  let user = db.prepare('SELECT * FROM jogadores WHERE jid = ?').get(sender);
-  if (!user && cmd !== 'menu') {
-    const info = db.prepare(`INSERT INTO jogadores (jid, nick) VALUES (?, ?)`).run(sender, pushName);
-    const novoId = 1000 + info.lastInsertRowid;
-    db.prepare('UPDATE jogadores SET id_rpg = ? WHERE jid = ?').run(novoId, sender);
-    user = db.prepare('SELECT * FROM jogadores WHERE jid = ?').get(sender);
-  }
+  let user = obterOuCriarJogador(sender, pushName);
 
   // ─── AUTENTICAÇÕES POR SENHA ───
   if (cmd === 'admin') {
     const senhaDigitada = args[1];
     if (senhaDigitada === CONFIG.senhaAdmin) {
       sessoesAutenticadas.set(sender, 'admin');
-      return sock.sendMessage(jid, { text: `✅ Painel Admin liberado para você! Digite */menuadmin*` });
+      return sock.sendMessage(jid, { text: `✅ Painel Admin liberado! Digite */menuadmin*` });
     }
     return sock.sendMessage(jid, { text: `❌ Senha incorreta. Uso: */admin senha*` });
   }
@@ -208,7 +222,7 @@ Use */escolher raça Humano* ou */escolher raça Oni* para definir sua raça!`;
   }
 
   if (cmd === 'menuadmin') {
-    if (nivelAtuais !== 'admin' && nivelAtuais !== 'ntei') return sock.sendMessage(jid, { text: `❌ Acesso negado. Use /admin [senha]` });
+    if (nivelAtuais !== 'admin' && nivelAtuais !== 'ntei') return sock.sendMessage(jid, { text: `❌ Acesso negado.` });
     const menuAdmin = `╭════════════════════════╗
 │      👑 PAINEL ADMIN    │
 ╰════════════════════════╯
@@ -262,8 +276,8 @@ Use */escolher raça Humano* ou */escolher raça Oni* para definir sua raça!`;
     return sock.sendMessage(jid, { text: menuAdmin });
   }
 
-  if (cmd === 'menuntei' || cmd === 'omega') {
-    if (nivelAtuais !== 'ntei') return sock.sendMessage(jid, { text: `❌ Permissão OMEGA Requerida. Insira a chave em /ntei` });
+  if (cmd === 'menuntei') {
+    if (nivelAtuais !== 'ntei') return sock.sendMessage(jid, { text: `❌ Permissão OMEGA Requerida.` });
     const menuNtei = `╭═══════════════════════════════╮
 │           ☢️ N.T.E.I ☢️         │
 │  NÚCLEO TECNOLÓGICO ESTRATÉGICO │
@@ -289,31 +303,19 @@ Use */escolher raça Humano* ou */escolher raça Oni* para definir sua raça!`;
 ┃ 💵 /impostos
 ╰━━━━━━━━━━━━━━━━━━━━━━╯
 
-╭━━━〔 👤 JOGADORES 〕━━━╮
-┃ 🔎 /perfil
-┃ 📜 /historico
-┃ 💰 /saldo
-┃ 🎒 /inventario
-┃ 📊 /estatisticas
-┃ 🚫 /ban
-┃ ♻️ /desban
-┃ 🔇 /mute
-┃ 🏅 /patentes
-╰━━━━━━━━━━━━━━━━━━╯
-
 ⚠️ SISTEMA OPERACIONAL TANGERINA OS
 ⚠️ NÍVEL DE ACESSO: OMEGA`;
     return sock.sendMessage(jid, { text: menuNtei });
   }
 
-  // ─── SISTEMA DE ECONOMIA POR ID E STRINGS DINÂMICAS ───
+  // ─── ECONOMIA POR ID ───
   if (cmd === 'transferir' || cmd === 'transferencia') {
     const matchId = body.match(/id:(\d+)/i);
     const matchVal = body.match(/\s(\d+)/);
     const motivo = body.split(/motivo:/i)[1] || 'Negociação Livre';
 
     if (!matchId || !matchVal) {
-      return sock.sendMessage(jid, { text: `❌ Use o padrão: */transferir id:1001 1500 motivo:Compra de Card*` });
+      return sock.sendMessage(jid, { text: `❌ Use o padrão: */transferir id:1003 1500 motivo:Compra*` });
     }
 
     const destId = parseInt(matchId[1]);
@@ -321,11 +323,14 @@ Use */escolher raça Humano* ou */escolher raça Oni* para definir sua raça!`;
 
     if (user.ienes < valor) return sock.sendMessage(jid, { text: `❌ Você não tem ${valor} Ienes suficientes.` });
 
-    const destino = db.prepare('SELECT * FROM jogadores WHERE id_rpg = ?').get(destId);
+    const destino = buscarJogadorPorId(destId);
     if (!destino) return sock.sendMessage(jid, { text: `❌ Destinatário com o ID ${destId} não existe.` });
 
-    db.prepare('UPDATE jogadores SET ienes = ienes - ? WHERE jid = ?').run(valor, sender);
-    db.prepare('UPDATE jogadores SET ienes = ienes + ? WHERE id_rpg = ?').run(valor, destId);
+    user.ienes -= valor;
+    destino.ienes += valor;
+
+    atualizarJogador(sender, user);
+    atualizarJogador(destino.jid, destino);
 
     const dataAtual = new Date().toLocaleDateString('pt-BR');
     const comprovante = `*➖᭄⎝ᯌ •➖• ஜ •⸨🎁⸩• ஜ •➖• ᯌ⎞➖᭄*
@@ -343,44 +348,37 @@ _𖠻↬✍🏻Ass:_
     return sock.sendMessage(jid, { text: comprovante });
   }
 
-  if (cmd === 'rm-ienes') {
-    if (nivelAtuais === 'user') return;
-    const matchId = body.match(/id:(\d+)/i);
-    const matchVal = body.match(/\s(\d+)/);
-    if (!matchId || !matchVal) return sock.sendMessage(jid, { text: `❌ Uso: */rm-ienes id:1001 500*` });
-
-    const targetId = parseInt(matchId[1]);
-    const valor = parseInt(matchVal[1]);
-    db.prepare('UPDATE jogadores SET ienes = MAX(0, ienes - ?) WHERE id_rpg = ?').run(valor, targetId);
-    return sock.sendMessage(jid, { text: `✅ Removido o valor do ID ${targetId} com sucesso.` });
-  }
-
   if (cmd === 'add-ienes') {
     if (nivelAtuais === 'user') return;
     const matchId = body.match(/id:(\d+)/i);
     const matchVal = body.match(/\s(\d+)/);
-    if (!matchId || !matchVal) return sock.sendMessage(jid, { text: `❌ Uso: */add-ienes id:1001 500*` });
+    if (!matchId || !matchVal) return sock.sendMessage(jid, { text: `❌ Uso: */add-ienes id:1003 500*` });
 
-    const targetId = parseInt(matchId[1]);
-    const valor = parseInt(matchVal[1]);
-    db.prepare('UPDATE jogadores SET ienes = ienes + ? WHERE id_rpg = ?').run(valor, targetId);
-    return sock.sendMessage(jid, { text: `🪙 Adicionado com sucesso ao ID ${targetId}.` });
+    const tgt = buscarJogadorPorId(matchId[1]);
+    if (!tgt) return sock.sendMessage(jid, { text: `❌ ID não encontrado.` });
+
+    tgt.ienes += parseInt(matchVal[1]);
+    atualizarJogador(tgt.jid, tgt);
+    return sock.sendMessage(jid, { text: `🪙 Adicionado com sucesso ao ID ${tgt.id_rpg}.` });
   }
 
-  if (cmd === 'addtabela') {
+  if (cmd === 'rm-ienes') {
     if (nivelAtuais === 'user') return;
     const matchId = body.match(/id:(\d+)/i);
-    const matchVal = body.match(/\+(\d+)/);
-    if (!matchId || !matchVal) return;
+    const matchVal = body.match(/\s(\d+)/);
+    if (!matchId || !matchVal) return sock.sendMessage(jid, { text: `❌ Uso: */rm-ienes id:1003 500*` });
 
-    const targetId = parseInt(matchId[1]);
-    const valor = parseInt(matchVal[1]);
-    db.prepare('UPDATE jogadores SET ienes = ienes + ? WHERE id_rpg = ?').run(valor, targetId);
-    return sock.sendMessage(jid, { text: `📊 Tabela Modificada! ID ${targetId} recebeu +${valor}` });
+    const tgt = buscarJogadorPorId(matchId[1]);
+    if (!tgt) return sock.sendMessage(jid, { text: `❌ ID não encontrado.` });
+
+    tgt.ienes = Math.max(0, tgt.ienes - parseInt(matchVal[1]));
+    atualizarJogador(tgt.jid, tgt);
+    return sock.sendMessage(jid, { text: `✅ Removido o valor do ID ${tgt.id_rpg}.` });
   }
 
   if (cmd === 'tabela-ienes') {
-    const list = db.prepare('SELECT nick, ienes, raca FROM jogadores').all();
+    const db = carregarDB();
+    const list = Object.values(db.jogadores);
     let humanos = '', onis = '', total = 0;
 
     list.forEach(p => {
@@ -415,61 +413,55 @@ _⟆🏙️⟅ Aldeia do Norte「${fmt(total)} Ienes」_
     return sock.sendMessage(jid, { text: outputTabela });
   }
 
-  // ─── COMANDO ALTERAÇÃO DE PATENTES ───
-  if (cmd === 'patentes' || cmd === 'setpatente') {
-    if (nivelAtuais === 'user') return sock.sendMessage(jid, { text: `❌ Comando para Moderadores.` });
-    const matchId = body.match(/id:(\d+)/i);
-    const novaPatente = body.replace(/\/setpatente|\/patentes/i, '').replace(/id:\d+/i, '').trim();
-    if (!matchId || !novaPatente) return sock.sendMessage(jid, { text: `❌ Uso: */setpatente id:1001 Hashira da Névoa*` });
+  // ─── PLACAR DE LUTAS AUTOMÁTICO ───
+  if (cmd === 'plc' || cmd === 'placar') {
+    const id1 = parseInt(args[1]);
+    const id2 = parseInt(args[2]);
+    if (!id1 || !id2) return sock.sendMessage(jid, { text: `❌ Use: */plc ID1 ID2*` });
 
-    db.prepare('UPDATE jogadores SET patente = ? WHERE id_rpg = ?').run(novaPatente, parseInt(matchId[1]));
-    return sock.sendMessage(jid, { text: `⚔️ Patente do ID ${matchId[1]} foi alterada para: *${novaPatente}*` });
+    const p1 = buscarJogadorPorId(id1);
+    const p2 = buscarJogadorPorId(id2);
+
+    if (!p1 || !p2) return sock.sendMessage(jid, { text: `❌ Um ou ambos os IDs informados não existem.` });
+
+    const dataPlc = new Date().toLocaleDateString('pt-BR');
+    const templatePlc = `*ᥫ •➖• ᯏ ➖•᯾• ⟆⚔️⟅ •᯾•➖ ᯟ •➖•ᥫ*
+    _ಶ 🔆 ၍ Kimetsu New Age ၍ 🔆 ಶ_
+       *႟⚔️୨ Placar De Lutas୧🛡️႟*
+           *⊢📆〣${dataPlc}〣📆⊣*
+
+*၍👤ID: ${id1} | ${p1.nick}/${p1.familia}/${p1.patente}*
+*❣️200/400⚡*
+VS
+*၍👤ID: ${id2} | ${p2.nick}/${p2.familia}/${p2.patente}*
+*❣️200/400⚡*
+
+*ᥫ •➖• ᯏ ➖•᯾• ⟆⚔️⟅ •᯾•➖ ᯟ •➖•ᥫ*
+_𖠻↬✍🏻Ass:_
+*⌥ʕBy NTEi🛜ʔ⌥*`;
+    return sock.sendMessage(jid, { text: templatePlc });
   }
 
-  // ─── CONSULTA DE IDS EM LISTA GERAL ───
-  if (cmd === 'buscar' || cmd === 'usuarios' || cmd === 'listaids') {
-    const todos = db.prepare('SELECT id_rpg, nick, patente FROM jogadores').all();
-    let strIds = `📋 *TABELA DE IDS - CONSULTA GERAL*\n\n`;
-    todos.forEach(p => {
-      strIds += `Id:${p.id_rpg} | ${p.nick} [${p.patente || 'Membro'}]\n`;
-    });
-    return sock.sendMessage(jid, { text: strIds });
-  }
-
-  // ─── INVENTÁRIO INDIVIDUAL DE CARDS ───
-  if (bodyLow.startsWith('/salvar inventário') || bodyLow.startsWith('/salvarinventario')) {
-    const textoCards = body.substring(body.indexOf(' ')).trim();
-    if (!textoCards) return sock.sendMessage(jid, { text: `❌ Digite o texto dos seus cards junto com o comando.` });
-    db.prepare('INSERT OR REPLACE INTO inventarios (jid, texto) VALUES (?, ?)').run(sender, textoCards);
-    return sock.sendMessage(jid, { text: `🎒 Seu controle de cards foi atualizado e salvo com sucesso!` });
-  }
-
-  if (cmd === 'inventario' || cmd === 'inventário') {
-    const inv = db.prepare('SELECT texto FROM inventarios WHERE jid = ?').get(sender);
-    if (!inv) return sock.sendMessage(jid, { text: `❌ Você não salvou cards ainda. Use /Salvar Inventário + Conteúdo` });
-    return sock.sendMessage(jid, { text: `🎒 *SEU CONTROLE DE CARDS SAVO:*\n\n${inv.texto}` });
-  }
-
-  // ─── DEFINIÇÃO DE RAÇA E FAMÍLIA PELO USUÁRIO ───
+  // ─── ESCOLHER FAMÍLIA OU RAÇA ───
   if (cmd === 'escolher') {
     const tipo = args[1]?.toLowerCase();
     const escolha = resto.slice(1).join(' ');
 
     if (tipo === 'raça' || tipo === 'raca') {
       if (escolha.toLowerCase() === 'humano' || escolha.toLowerCase() === 'oni') {
-        db.prepare('UPDATE jogadores SET raca = ? WHERE jid = ?').run(escolha, sender);
+        user.raca = escolha.toLowerCase() === 'oni' ? '👹 Oni' : '👱🏻‍♂️ Humano';
+        atualizarJogador(sender, user);
         return sock.sendMessage(jid, { text: `🧬 Raça definida para *${escolha}* com sucesso!` });
       }
-      return sock.sendMessage(jid, { text: `❌ Escolha válida: */escolher raça Humano* ou */escolher raça Oni*` });
     }
 
     if (tipo === 'família' || tipo === 'familia') {
-      db.prepare('UPDATE jogadores SET familia = ? WHERE jid = ?').run(escolha, sender);
+      user.familia = escolha;
+      atualizarJogador(sender, user);
       return sock.sendMessage(jid, { text: `⛩️ Sua família agora é *${escolha}*!` });
     }
   }
 
-  // ─── CONSULTA DE FAMÍLIAS DISPONÍVEIS ───
   if (cmd === 'familias' || cmd === 'famílias') {
     const menuFamilias = `*➖᭄⎝ᯌ •➖• ஜ •⸨🌅⸩• ஜ •➖• ᯌ⎞➖᭄*
          _ᗂ ⛩️ Famílias Disponíveis ⛩️ ᗃ_
@@ -490,50 +482,41 @@ _⟆🏙️⟅ Aldeia do Norte「${fmt(total)} Ienes」_
     return sock.sendMessage(jid, { text: menuFamilias });
   }
 
-  // ─── SINALIZADOR PLACAR DE LUTAS AUTOMÁTICO por ID ───
-  if (cmd === 'plc' || cmd === 'placar') {
-    const id1 = parseInt(args[1]);
-    const id2 = parseInt(args[2]);
-    if (!id1 || !id2) return sock.sendMessage(jid, { text: `❌ Use: */plc ID_Player1 ID_Player2*` });
+  // ─── INVENTÁRIO DE CARDS INDIVIDUAL ───
+  if (bodyLow.startsWith('/salvar inventário') || bodyLow.startsWith('/salvarinventario')) {
+    const textoCards = body.substring(body.indexOf(' ')).trim();
+    if (!textoCards) return sock.sendMessage(jid, { text: `❌ Insira o conteúdo dos cards.` });
 
-    const p1 = db.prepare('SELECT nick, familia, patente FROM jogadores WHERE id_rpg = ?').get(id1);
-    const p2 = db.prepare('SELECT nick, familia, patente FROM jogadores WHERE id_rpg = ?').get(id2);
-
-    if (!p1 || !p2) return sock.sendMessage(jid, { text: `❌ Um ou ambos os IDs informados não constam no banco.` });
-
-    const dataPlc = new Date().toLocaleDateString('pt-BR');
-    const templatePlc = `*ᥫ •➖• ᯏ ➖•᯾• ⟆⚔️⟅ •᯾•➖ ᯟ •➖•ᥫ*
-    _ಶ 🔆 ၍ Kimetsu New Age ၍ 🔆 ಶ_
-       *႟⚔️୨ Placar De Lutas୧🛡️႟*
-           *⊢📆〣${dataPlc}〣📆⊣*
-
-*၍👤ID: ${id1} | ${p1.nick}/${p1.familia}/${p1.patente}*
-*❣️200/400⚡*
-VS
-*၍👤ID: ${id2} | ${p2.nick}/${p2.familia}/${p2.patente}*
-*❣️200/400⚡*
-
-*ᥫ •➖• ᯏ ➖•᯾• ⟆⚔️⟅ •᯾•➖ ᯟ •➖•ᥫ*
-_𖠻↬✍🏻Ass:_
-*⌥ʕBy NTEi🛜ʔ⌥*`;
-    return sock.sendMessage(jid, { text: templatePlc });
+    const db = carregarDB();
+    db.inventarios[sender] = textoCards;
+    salvarDB(db);
+    return sock.sendMessage(jid, { text: `🎒 Cards salvos e sincronizados com sucesso!` });
   }
 
-  // ─── RECONHECIMENTO E SALVAMENTO DE LOJA CUSTOMIZADA ───
+  if (cmd === 'inventario' || cmd === 'inventário') {
+    const db = carregarDB();
+    const inv = db.inventarios[sender];
+    if (!inv) return sock.sendMessage(jid, { text: `❌ Use: /salvar inventário + Seus Cards` });
+    return sock.sendMessage(jid, { text: `🎒 *SEUS CARDS SALVOS:*\n\n${inv}` });
+  }
+
+  // ─── LOJA DE FICHAS CUSTOMIZADA ───
   if (bodyLow.includes('loja de fichas') && (nivelAtuais === 'admin' || nivelAtuais === 'ntei')) {
-    db.prepare(`INSERT OR REPLACE INTO configuracao_loja (chave, conteudo) VALUES ('loja_fichas', ?)`).run(body);
-    return sock.sendMessage(jid, { text: `🏪 Molde de Loja registrado e atualizado para consultas no comando /loja-rk!` });
+    const ldb = carregarLoja();
+    ldb.loja_fichas = body;
+    salvarLoja(ldb);
+    return sock.sendMessage(jid, { text: `🏪 Molde de loja atualizado com sucesso!` });
   }
 
   if (cmd === 'loja-rk') {
-    const dadosLoja = db.prepare(`SELECT conteudo FROM configuracao_loja WHERE chave = 'loja_fichas'`).get();
-    if (!dadosLoja) return sock.sendMessage(jid, { text: `🏪 Nenhuma loja customizada foi enviada pela staff ainda.` });
-    return sock.sendMessage(jid, { text: dadosLoja.conteudo });
+    const ldb = carregarLoja();
+    if (!ldb.loja_fichas) return sock.sendMessage(jid, { text: `🏪 Nenhuma loja de fichas foi salva pela administração ainda.` });
+    return sock.sendMessage(jid, { text: ldb.loja_fichas });
   }
 }
 
 // ══════════════════════════════════════════
-//    CONEXÃO COMPATÍVEL COM BAILEYS V6
+//         SESSÃO CONEXÃO BAILEYS
 // ══════════════════════════════════════════
 async function conectarNtei() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -552,7 +535,7 @@ async function conectarNtei() {
       const rec = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
       if (rec) conectarNtei();
     } else if (connection === 'open') {
-      console.log('🍊 Tangerina OS & Core NTEi carregados com Sucesso!');
+      console.log('🍊 Tangerina OS carregado via JSON Database sem erros!');
     }
   });
 
@@ -563,7 +546,7 @@ async function conectarNtei() {
       try {
         await gerenciarMensagem(sock, msg);
       } catch (err) {
-        console.error('NTEi Error Handler:', err);
+        console.error('Erro no processador:', err);
       }
     }
   });
