@@ -1,12 +1,9 @@
+
 import makeWASocket, { useMultiFileAuthState, DisconnectReason, delay, Browsers } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import readline from 'readline';
-import { runMigrations } from './database/migrations/init.js';
-import { runShopMigrations } from './database/migrations/shop_init.js';
-import db from './database/connection.js';
-
-import { commandPerfil } from './commands/rpg/perfil.js';
-import { commandLoja, commandComprar } from './commands/shop/shopCmds.js';
+import fs from 'fs';
+import path from 'path';
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
@@ -14,37 +11,63 @@ const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 // ══════════════════════════════════════════
 //           CONFIGURAÇÕES GLOBAIS
 // ══════════════════════════════════════════
-const OWNER_NUMBER = '5511999999999'; // Substitua pelo seu número sem o @
-const OWNER_JID = `${OWNER_NUMBER}@s.whatsapp.net`;
+const CONFIG = {
+    ownerNumber: '5511999999999', // Substitua pelo seu número sem o @
+    senhaAdmin: 'admin@2626',
+    senhaNtei: 'ntei@3010',
+    dbPath: './database.json',
+    lojaPath: './loja.json'
+};
 
-const SENHA_ADMIN = 'admin@2626';
-const SENHA_NTEI = 'ntei@3010';
+const OWNER_JID = `${CONFIG.ownerNumber}@s.whatsapp.net`;
 
-// Estrutura para sessões ativas temporárias de Admin/NTEI por tempo (1 hora de login)
-const sessoesAdmin = new Map(); // jid -> timestamp_expira
-const sessoesNtei = new Map();  // jid -> timestamp_expira
-
-// ══════════════════════════════════════════
-//           ANTI-FLOOD & ANTI-LINK
-// ══════════════════════════════════════════
+// Sessões temporárias para quem logar via senha (válido por 1 hora)
+const sessoesAdmin = new Map();
+const sessoesNtei = new Map();
 const floodMap = new Map();
-const FLOOD_LIMIT = 5;       
-const FLOOD_WINDOW = 5000;   
-const FLOOD_BAN = 5 * 60 * 1000; 
-const LINK_REGEX = /(https?:\/\/|www\.|chat\.whatsapp\.com)/i;
 
+// ══════════════════════════════════════════
+//   BANCO DE DADOS (JSON INTEGRADO)
+// ══════════════════════════════════════════
+const DB = {
+    carregar() {
+        if (!fs.existsSync(CONFIG.dbPath)) {
+            const inicial = { usuarios: {}, aldeia: { ienes: 333830 }, logs: [] };
+            fs.writeFileSync(CONFIG.dbPath, JSON.stringify(inicial, null, 2));
+        }
+        return JSON.parse(fs.readFileSync(CONFIG.dbPath));
+    },
+    salvar(data) {
+        fs.writeFileSync(CONFIG.dbPath, JSON.stringify(data, null, 2));
+    },
+    getUsuario(id, nome = 'Desconhecido') {
+        const db = this.carregar();
+        if (!db.usuarios[id]) {
+            db.usuarios[id] = { 
+                nome, id_rpg: 1000 + Object.keys(db.usuarios).length, ienes: 0, eng: 0, xp: 0, nivel: 1, 
+                raca: 'Indefinida', familia: 'Nenhuma', nacao: 'Aldeia do Norte', patente: '⏺️ Cidadão', recrutador: 'Sistema' 
+            };
+            this.salvar(db);
+        }
+        return { db, usuario: db.usuarios[id] };
+    }
+};
+
+// ══════════════════════════════════════════
+//   HELPERS & EXTRAÇÃO DE CAMPOS
+// ══════════════════════════════════════════
 function checkFlood(sender) {
     const now = Date.now();
     const data = floodMap.get(sender);
     if (data?.banned && now < data.bannedUntil) return true;
-    if (!data || now - data.start > FLOOD_WINDOW) {
+    if (!data || now - data.start > 5000) {
         floodMap.set(sender, { count: 1, start: now, banned: false });
         return false;
     }
     data.count++;
-    if (data.count >= FLOOD_LIMIT) {
+    if (data.count >= 5) {
         data.banned = true;
-        data.bannedUntil = now + FLOOD_BAN;
+        data.bannedUntil = now + (5 * 60 * 1000);
         return true;
     }
     return false;
@@ -57,9 +80,6 @@ function extractText(msg) {
     return inner.conversation || inner.extendedTextMessage?.text || inner.imageMessage?.caption || inner.videoMessage?.caption || '';
 }
 
-// ══════════════════════════════════════════
-//           EXTRAIR VALORES DA FICHA
-// ══════════════════════════════════════════
 function extrairCampo(lines, ...termos) {
     for (const termo of termos) {
         const linha = lines.find(l => l.toLowerCase().includes(termo.toLowerCase()));
@@ -74,22 +94,14 @@ function extrairCampo(lines, ...termos) {
     return null;
 }
 
-// Inicializar banco de dados
-runMigrations();
-runShopMigrations();
-
-try {
-    db.prepare(`CREATE TABLE IF NOT EXISTS admins (jid TEXT PRIMARY KEY, nivel TEXT DEFAULT 'admin')`).run();
-} catch(e) {}
-try { db.prepare('ALTER TABLE jogadores ADD COLUMN raca TEXT DEFAULT "Indefinida"').run(); } catch(e) {}
-try { db.prepare('ALTER TABLE jogadores ADD COLUMN recrutador TEXT DEFAULT ""').run(); } catch(e) {}
-try { db.prepare('ALTER TABLE jogadores ADD COLUMN nacao TEXT DEFAULT ""').run(); } catch(e) {}
-try { db.prepare('ALTER TABLE jogadores ADD COLUMN engrenagens INTEGER DEFAULT 0').run(); } catch(e) {}
-try { db.prepare('ALTER TABLE jogadores ADD COLUMN nivel INTEGER DEFAULT 1').run(); } catch(e) {}
-
+// ══════════════════════════════════════════
+//   PROCESSO PRINCIPAL DO CONECTOR
+// ══════════════════════════════════════════
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-    const sock = makeWASocket.default({
+
+    // CORREÇÃO DO ERRO DO PRINT: Chamada direta sem .default
+    const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
         auth: state,
@@ -99,21 +111,21 @@ async function connectToWhatsApp() {
     sock.ev.on('creds.update', saveCreds);
 
     if (!sock.authState.creds.registered) {
-        console.log("\n🍊 [Tangerina-Bot] SISTEMA DE PAREAMENTO POR TEXTO 🍊\n");
-        await delay(3000);
+        console.log("\n🍊 [Tangerina-Bot] CONEXÃO VIA PAREAMENTO TEXTUAL 🍊\n");
+        await delay(2000);
         let phoneNumber = await question('Digite o número do WhatsApp do Bot (Ex: 5511999999999): ');
         phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
         if (phoneNumber) {
             try {
                 let code = await sock.requestPairingCode(phoneNumber);
                 code = code?.match(/.{1,4}/g)?.join('-') || code;
-                console.log(`\n🔑 SEU CÓDIGO DE CONEXÃO: \x1b[32m${code}\x1b[0m\n`);
-            } catch (e) { console.error("Erro ao gerar código.", e); }
+                console.log(`\n🔑 CÓDIGO DE CONEXÃO: \x1b[32m${code}\x1b[0m\n`);
+            } catch (e) { console.error("Erro ao gerar o código.", e); }
         }
     }
 
     sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
-        if (connection === 'open') console.log('🍊 Tangerina Bot conectado com sucesso!');
+        if (connection === 'open') console.log('🍊 Tangerina Bot conectado com sucesso no seu Termux!');
         if (connection === 'close') {
             const should = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (should) connectToWhatsApp();
@@ -130,368 +142,97 @@ async function connectToWhatsApp() {
                 const remoteJid = msg.key.remoteJid;
                 const sender = msg.key.participant || remoteJid;
                 const text = extractText(msg).trim();
-                const isGroup = remoteJid.endsWith('@g.us');
                 const senderParam = sender.split('@')[0];
 
                 if (!text) continue;
 
-                // Verificações de nível (Donos diretos ignoram senhas)
                 const isDonoDireto = (sender === OWNER_JID || `${senderParam}@s.whatsapp.net` === OWNER_JID);
                 const hasAdminSession = sessoesAdmin.has(sender) && sessoesAdmin.get(sender) > Date.now();
                 const hasNteiSession = sessoesNtei.has(sender) && sessoesNtei.get(sender) > Date.now();
 
-                // Anti-Flood
                 if (!isDonoDireto && !hasNteiSession && checkFlood(sender)) continue;
-
-                // Anti-Link
-                if (isGroup && !isDonoDireto && !hasNteiSession && LINK_REGEX.test(text)) {
-                    await sock.sendMessage(remoteJid, { delete: msg.key });
-                    continue;
-                }
 
                 const args = text.split(' ');
                 const cmd = args[0].toLowerCase();
 
-                // ══════════════════════════════════════════
-                //    SISTEMA DE AUTENTICAÇÃO / LOGIN
-                // ══════════════════════════════════════════
+                // ═══ SISTEMA DE SENHAS ═══
                 if (cmd === '/admin') {
-                    const senhaInfo = args[1];
-                    if (!senhaInfo) {
-                        await sock.sendMessage(remoteJid, { text: `⚠️ Para acessar o Painel Admin utilize:\n*/admin senha*` });
-                        continue;
-                    }
-                    if (senhaInfo === SENHA_ADMIN || isDonoDireto) {
-                        sessoesAdmin.set(sender, Date.now() + 60 * 60 * 1000); // 1 hora de acesso
-                        await sock.sendMessage(remoteJid, { text:
-`╭════════════════════════╗
-│      👑 PAINEL ADMIN    │
-╰════════════════════════╯
-
-╭━━━〔 👥 USUÁRIOS 〕━━━╮
-┃ 🔍 /buscar
-┃ 📜 /historico
-┃ ⚠️ /advertir
-┃ 🚫 /ban
-┃ ♻️ /desban
-┃ 🔇 /mute
-┃ 🔊 /unmute
-┃ 🧹 /limpar-ficha
-╰━━━━━━━━━━━━━━━━━━╯
-
-╭━━━〔 💰 ECONOMIA 〕━━━╮
-┃ 🪙 /add-ienes
-┃ 🪙 /rm-ienes
-┃ ⚙️ /add-eng
-┃ ⚙️ /rm-eng
-┃ 🎁 /bonus
-┃ 🧾 /extrato
-┃ 💸 /gastos
-┃ 📊 /saldo-geral
-╰━━━━━━━━━━━━━━━━━━╯
-
-╭━━━〔 🏪 LOJAS 〕━━━╮
-┃ ➕ /add-item
-┃ ➖ /rm-item
-┃ 💰 /alterar-preco
-┃ 📦 /estoque
-┃ 🏪 /gerenciar-loja
-╰━━━━━━━━━━━━━━━━━━╯
-
-╭━━━〔 ⚔️ RPG 〕━━━╮
-┃ 🎯 /criar-missao
-┃ 🎲 /evento
-┃ 🏆 /ranking
-┃ 📈 /add-xp
-┃ 📉 /rm-xp
-┃ 🏮 /gerenciar-familias
-╰━━━━━━━━━━━━━━━━━━╯
-
-╭━━━〔 📊 RELATÓRIOS 〕━━━╮
-┃ 📋 /logs
-┃ 📈 /atividade
-┃ 💰 /movimentacoes
-┃ 👥 /usuarios
-┃ 🚨 /denuncias
-╰━━━━━━━━━━━━━━━━━━╯` });
+                    const senha = args[1];
+                    if (senha === CONFIG.senhaAdmin || isDonoDireto) {
+                        sessoesAdmin.set(sender, Date.now() + 3600000);
+                        await sock.sendMessage(remoteJid, { text: `╭════════════════════════╗\n│      👑 PAINEL ADMIN    │\n╰════════════════════════╯\n\n╭━━━〔 👥 USUÁRIOS 〕━━━╮\n┃ 🔍 /buscar\n┃ 📜 /historico\n┃ ⚠️ /advertir\n┃ 🚫 /ban\n┃ ♻️ /desban\n┃ 🔇 /mute\n┃ 🔊 /unmute\n┃ 🧹 /limpar-ficha\n╰━━━━━━━━━━━━━━━━━━╯\n\n╭━━━〔 💰 ECONOMIA 〕━━━╮\n┃ 🪙 /add-ienes\n┃ 🪙 /rm-ienes\n┃ ⚙️ /add-eng\n┃ ⚙️ /rm-eng\n┃ 🎁 /bonus\n┃ 🧾 /extrato\n┃ 💸 /gastos\n┃ 📊 /saldo-geral\n╰━━━━━━━━━━━━━━━━━━╯` });
                     } else {
-                        await sock.sendMessage(remoteJid, { text: `❌ Senha administrativa incorreta!` });
+                        await sock.sendMessage(remoteJid, { text: "❌ Senha incorreta!" });
                     }
                     continue;
                 }
 
                 if (cmd === '/ntei') {
-                    const senhaInfo = args[1];
-                    if (!senhaInfo) {
-                        await sock.sendMessage(remoteJid, { text: `⚠️ Para acessar o Painel OMEGA utilize:\n*/ntei senha*` });
-                        continue;
-                    }
-                    if (senhaInfo === SENHA_NTEI || isDonoDireto) {
-                        sessoesNtei.set(sender, Date.now() + 60 * 60 * 1000);
-                        let jogador = db.prepare('SELECT nick FROM jogadores WHERE jid = ?').get(sender) || { nick: msg.pushName || 'Diretor' };
-
-                        await sock.sendMessage(remoteJid, { text:
-`╭═══════════════════════════════╮
-│           ☢️ N.T.E.I ☢️         │
-│  NÚCLEO TECNOLÓGICO ESTRATÉGICO │
-│            IMPERIAL            │
-╰═══════════════════════════════╯
-
-┌〔 🔴 ACESSO OMEGA 〕┐
-│ Usuário: ${jogador.nick}
-│ Cargo: Diretor NTEI
-│ Permissão: Máxima
-└───────────────────┘
-
-╭━━━〔 💰 ECONOMIA GLOBAL 〕━━━╮
-┃ 💸 /gastos
-┃ 📈 /fluxocaixa
-┃ 🪙 /economia-global
-┃ 🏦 /banco-rpg
-┃ 📊 /balanco
-┃ 🧾 /transacoes
-┃ 🚨 /fraudes
-┃ 📋 /auditoria-financeira
-┃ 🎁 /recompensas
-┃ 💵 /impostos
-╰━━━━━━━━━━━━━━━━━━━━━━╯
-
-╭━━━〔 👤 JOGADORES 〕━━━╮
-┃ 🔎 /perfil
-┃ 📜 /historico
-┃ 💰 /saldo
-┃ 🎒 /inventario
-┃ 📊 /estatisticas
-┃ 🚫 /ban
-┃ ♻️ /desban
-┃ 🔇 /mute
-┃ 🏅 /patentes
-╰━━━━━━━━━━━━━━━━━━╯
-
-╭━━━〔 ⚔️ RPG CORE 〕━━━╮
-┃ 💮 /elementos
-┃ 🏮 /familias
-┃ ⚔️ /armas
-┃ 🩸 /habilidades
-┃ 📈 /xp-global
-┃ 🎯 /missoes
-┃ 🏆 /ranking
-┃ 🎲 /eventos
-╰━━━━━━━━━━━━━━━━━━╯
-
-╭━━━〔 🤖 SISTEMA 〕━━━╮
-┃ 📡 /status
-┃ 🔄 /backup
-┃ 📁 /database
-┃ 🧠 /ia
-┃ 📋 /logs
-┃ 🚨 /erros
-┃ ♻️ /restart
-┃ ☢️ /shutdown
-╰━━━━━━━━━━━━━━━━━━╯
-
-╭━━━〔 👑 ADMINISTRAÇÃO 〕━━━╮
-┃ 👑 /admins
-┃ 🔰 /promover
-┃ ⛔ /rebaixar
-┃ 📜 /permissoes
-┃ 📊 /atividade-admin
-┃ 🚨 /denuncias
-┃ 🔒 /bloquear-comando
-┃ 🔓 /liberar-comando
-╰━━━━━━━━━━━━━━━━━━━━━━╯
-
-╭━━━〔 🛰️ MONITORAMENTO 〕━━━╮
-┃ 📈 /estatisticas-gerais
-┃ 👥 /usuarios-online
-┃ 🏦 /movimentacoes
-┃ 💸 /gastos-hoje
-┃ 📅 /relatorio-semanal
-┃ 📋 /auditoria-completa
-╰━━━━━━━━━━━━━━━━━━━━━━╯
-
-⚠️ SISTEMA OPERACIONAL TANGERINA OS
-⚠️ NÍVEL DE ACESSO: OMEGA` });
+                    const senha = args[1];
+                    if (senha === CONFIG.senhaNtei || isDonoDireto) {
+                        sessoesNtei.set(sender, Date.now() + 3600000);
+                        const { usuario } = DB.getUsuario(sender, msg.pushName);
+                        await sock.sendMessage(remoteJid, { text: `╭═══════════════════════════════╮\n│           ☢️ N.T.E.I ☢️         │\n│  NÚCLEO TECNOLÓGICO ESTRATÉGICO │\n│            IMPERIAL            │\n╰═══════════════════════════════╯\n\n┌〔 🔴 ACESSO OMEGA 〕┐\n│ Usuário: ${usuario.nome}\n│ Cargo: Diretor NTEI\n│ Permissão: Máxima\n└───────────────────┘\n\n╭━━━〔 💰 ECONOMIA GLOBAL 〕━━━╮\n┃ 💸 /gastos\n┃ 📈 /fluxocaixa\n┃ 🪙 /economia-global\n┃ 🏦 /banco-rpg\n╰━━━━━━━━━━━━━━━━━━━━━━╯` });
                     } else {
-                        await sock.sendMessage(remoteJid, { text: `❌ Senha OMEGA N.T.E.I Incorreta!` });
+                        await sock.sendMessage(remoteJid, { text: "❌ Acesso OMEGA Negado!" });
                     }
                     continue;
                 }
 
-                // ══════════════════════════════════════════
-                //    MENU GERAL DE USUÁRIOS
-                // ══════════════════════════════════════════
-                if (cmd === '/menu' || cmd === '/ajuda' || cmd === '/start') {
-                    let jogador = db.prepare('SELECT * FROM jogadores WHERE jid = ?').get(sender) || { nick: msg.pushName || 'Membro', ienes: 0, engrenagens: 0, nivel: 1 };
-                    
-                    await sock.sendMessage(remoteJid, { text:
-`╭━━━〔 🍊 𝙏𝘼𝙉𝙂𝙀𝙍𝙄𝙉𝘼 𝘽𝙊𝙏 🍊 〕━━━╮
-┃
-┃ 👤 Usuário: ${jogador.nick}
-┃ 🏮 Organização: Caçadores
-┃ 💰 Ienes: ${jogador.ienes || 0}
-┃ ⚙️ Engrenagens: ${jogador.engrenagens || 0}
-┃ 📈 Nível: ${jogador.nivel || 1}
-┃
-╰━━━━━━━━━━━━━━━━━━━━━╯
-
-╭─❖「 📚 CENTRAL 」❖─╮
-│ 📜 /regras-sr
-│ 📜 /regras-vt
-│ 📜 /regras-basicas
-│ ☸️ /regras-armas
-│ ♋ /marca-cacador
-│ 📅 /cronograma
-╰─────────────────╯
-
-╭─❖「 ⚔️ SISTEMAS 」❖─╮
-│ 💮 /elementos
-│ 👥 /familias
-│ 🧾 /sistema-passe
-│ 🤎 /passe-bronze
-│ 🩶 /passe-prata
-│ 🔰 /sistema-vip
-╰─────────────────╯
-
-╭─❖「 💰 ECONOMIA 」❖─╮
-│ 🪙 /tabela-ienes
-│ ⚙️ /tabela-engrenagens
-│ 🪙 /loja-ienes
-│ ⚙️ /loja-ferreiros
-│ 🕋 /tabela-rs
-│ 💮 /loja-rk
-╰─────────────────╯
-
-╭─❖「 📋 FICHAS 」❖─╮
-│ 🏙️ /ficha-recrutamento
-│ 🪙 /transferencia
-│ 📛 /ficha-pontos
-│ 🏦 /compras
-│ 🔩 /ferreiros
-╰─────────────────╯
-
-╭─❖「 🌎 EXTRAS 」❖─╮
-│ 🌎 /extra
-╰─────────────────╯
-
-> 🍊 Tangerina Bot © 2026
-> ⚡ Powered By N.T.E.I` });
+                // ═══ MENU DE USUÁRIO ═══
+                if (cmd === '/menu' || cmd === '/ajuda') {
+                    const { usuario } = DB.getUsuario(sender, msg.pushName);
+                    await sock.sendMessage(remoteJid, { text: `╭━━━〔 🍊 𝙏𝘼𝙉𝙂𝙀𝙍𝙄𝙉𝘼 𝘽𝙊𝙏 🍊 〕━━━╮\n┃\n┃ 👤 Usuário: ${usuario.nome}\n┃ 🏮 Organização: Caçadores\n┃ 💰 Ienes: ${usuario.ienes}\n┃ ⚙️ Engrenagens: ${usuario.eng}\n┃ 📈 Nível: ${usuario.nivel}\n┃\n╰━━━━━━━━━━━━━━━━━━━━━╯\n\n╭─❖「 📚 CENTRAL 」❖─╮\n│ 📜 /regras-basicas\n│ 📅 /cronograma\n╰─────────────────╯` });
                     continue;
                 }
 
-                // ══════════════════════════════════════════
-                //    PROCESSAMENTO AUTOMÁTICO DE RECRUTAMENTO
-                // ══════════════════════════════════════════
-                if (text.includes('RECRUTAMENTO APROVADO') || text.includes('Nick:') || text.includes('Nick Escolhido:')) {
+                // ═══ INTERCEPTAÇÃO AUTOMÁTICA DE FICHA ═══
+                if (text.includes('RECRUTAMENTO APROVADO') || text.includes('Nick:')) {
                     const lines = text.split('\n');
                     const nick = extrairCampo(lines, 'Nick:', 'Nick Escolhido:');
-                    
                     if (nick) {
-                        let check = db.prepare('SELECT * FROM jogadores WHERE jid = ?').get(sender);
-                        if (check) continue; // Ignora se já existir perfil
+                        const dbData = DB.carregar();
+                        if (dbData.usuarios[sender]) continue;
 
-                        const maxId = db.prepare('SELECT MAX(id_rpg) as id FROM jogadores').get();
-                        const novoId = (maxId?.id || 1002) + 1;
+                        const novoId = 1000 + Object.keys(dbData.usuarios).length;
+                        const fam = extrairCampo(lines, 'Família:', 'Familia:') || 'Tomioka';
+                        const nac = extrairCampo(lines, 'Nação:', 'Nacao:') || 'Aldeia do Norte';
+                        const rec = extrairCampo(lines, 'Recrutador:') || 'Sistema';
 
-                        const familia = extrairCampo(lines, 'Família:', 'Familia:') || 'Tomioka';
-                        const nacao = extrairCampo(lines, 'Nação:', 'Nacao:') || 'Aldeia do Norte';
-                        const recrutador = extrairCampo(lines, 'Recrutador:') || 'Sistema';
-
-                        db.prepare(`
-                            INSERT INTO jogadores (jid, id_rpg, nick, raca, patente, familia, nacao, vila, recrutador, hp, max_hp, chakra, max_chakra, xp, ienes, engrenagens, nivel)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 100, 100, 100, 100, 0, 0, 0, 1)
-                        `).run(sender, novoId, nick, 'Indefinida', '⏺️ Cidadão', familia, nacao, nacao, recrutador);
+                        dbData.usuarios[sender] = {
+                            nome: nick, id_rpg: novoId, ienes: 0, eng: 0, xp: 0, nivel: 1,
+                            raca: 'Indefinida', familia: fam, nacao: nac, patente: '⏺️ Cidadão', recrutador: rec
+                        };
+                        DB.salvar(dbData);
 
                         await sock.sendMessage(remoteJid, {
-                            text: ` Harbinger do RPG!
-➖᭄⎝ᯌ •➖• ஜ •⸨🏙️⸩• ஜ •➖• ᯌ⎞➖᭄
-🤺 ᗂ ⛩️ Kimetsu New Age ⛩️ ᗃ 🤺
-
-📃 RECRUTAMENTO APROVADO! 📃
-_￫🆔◈ ID:  ⌊ ${novoId} ⌉_
-_￫🧾◈ Nick:  ⌊ ${nick} ⌉_
-_￫🧬◈ Raça:  ⌊ ❓ Indefinida ⌉_
-_￫⛩️◈ Família:  ⌊ ${familia} ⌉_
-_￫🏙️◈ Nação:  ⌊ ${nacao} ⌉_
-_￫🔘◈ Patente:  ⌊ ⏺️ Cidadão ⌉_
-_￫✒️◈ Recrutador:  ⌊ ${recrutador} ⌉_
-➖᭄⎝ᯌ •➖• ஜ •⸨🏙️⸩• ஜ •➖• ᯌ⎞➖᭄
-🍊 Bem-vindo(a) ao RPG, @${senderParam}!
-Use */escolher raça Humano* ou */escolher raça Oni* para definir sua raça!
-Ou digite */familias* para ver o catálogo de linhagens!`,
+                            text: `➖᭄⎝ᯌ •➖• ஜ •⸨🏙️⸩• ஜ •➖• ᯌ⎞➖᭄\n🤺 ᗂ ⛩️ Kimetsu New Age ⛩️ ᗃ 🤺\n\n📃 RECRUTAMENTO APROVADO! 📃\n_￫🆔◈ ID:  ⌊ ${novoId} ⌉_\n_￫🧾◈ Nick:  ⌊ ${nick} ⌉_\n_￫🧬◈ Raça:  ⌊ ❓ Indefinida ⌉_\n_￫⛩️◈ Família:  ⌊ ${fam} ⌉_\n_￫🏙️◈ Nação:  ⌊ ${nac} ⌉_\n_￫🔘◈ Patente:  ⌊ ⏺️ Cidadão ⌉_\n_￫✒️◈ Recrutador:  ⌊ ${rec} ⌉_\n➖᭄⎝ᯌ •➖• ஜ •⸨🏙️⸩• ஜ •➖• ᯌ⎞➖᭄\n🍊 Bem-vindo(a) ao RPG, @${senderParam}!\nUse */escolher raça Humano* ou */escolher raça Oni* para definir sua raça!`,
                             mentions: [sender]
                         });
                         continue;
                     }
                 }
 
-                // ══════════════════════════════════════════
-                //    CATÁLOGO DE FAMÍLIAS & ESCOLHA
-                // ══════════════════════════════════════════
-                if (cmd === '/familias') {
-                    await sock.sendMessage(remoteJid, { text:
-`*➖᭄⎝ᯌ •➖• ஜ •⸨🌅⸩• ஜ •➖• ᯌ⎞➖᭄*
-         _ᗂ ⛩️ Famílias Disponíveis ⛩️ ᗃ_
-
-ᗂ🌅• Vila dos Ferreiros •🌅ᗃ
-> Família Kanroji    ⃝💟
-- Regenera 70%❤️ da vida do usuário.
-> Família Tokito    ⃝♌
-- Drena 10%🔹 de energia do oponente.
-
-ᗂ🏙️• Vila dos Ferreiros •🏙️ᗃ
-> Família Tomioka    ⃝☸️
-- Aumenta 50%❤️/🔹 de vida e energia total do usuário.
-> Família Kamado    ⃝🎴
-- Aumenta 30%♦️ de dano em técnicas do usuário.
-
-*➖᭄⎝ᯌ •➖• ஜ •⸨🏙️⸩• ஜ •➖• ᯌ⎞➖᭄*
-
-👉 Use */escolher familia [Nome]* para setar a sua.` });
-                    continue;
-                }
-
+                // ═══ ESCOLHA DE RAÇAS OU FAMÍLIAS ═══
                 if (cmd === '/escolher') {
-                    const subOpcao = args[1]?.toLowerCase();
-                    const valor = args.slice(2).join(' ');
+                    const tipo = args[1]?.toLowerCase();
+                    const escolha = args.slice(2).join(' ');
+                    const { db, usuario } = DB.getUsuario(sender, msg.pushName);
 
-                    let jogador = db.prepare('SELECT * FROM jogadores WHERE jid = ?').get(sender);
-                    if (!jogador) {
-                        await sock.sendMessage(remoteJid, { text: `❌ Registre-se primeiro enviando sua ficha aprovada!` });
-                        continue;
-                    }
-
-                    if (subOpcao === 'raça' || subOpcao === 'raca') {
-                        if (jogador.raca && jogador.raca !== 'Indefinida') {
-                            await sock.sendMessage(remoteJid, { text: `❌ Você já escolheu sua raça como: *${jogador.raca}*!` });
+                    if (tipo === 'raça' || tipo === 'raca') {
+                        if (usuario.raca !== 'Indefinida') {
+                            await sock.sendMessage(remoteJid, { text: `❌ Você já pertence à raça ${usuario.raca}!` });
                             continue;
                         }
-                        const racaF = valor.toLowerCase() === 'oni' ? '👹 Oni' : (valor.toLowerCase() === 'humano' ? '👱‍♂️ Humano' : null);
-                        if (!racaF) {
-                            await sock.sendMessage(remoteJid, { text: `❌ Escolha inválida. Use:\n*/escolher raça Humano* ou */escolher raça Oni*` });
-                            continue;
-                        }
-                        db.prepare('UPDATE jogadores SET raca = ? WHERE jid = ?').run(racaF, sender);
-                        await sock.sendMessage(remoteJid, { text: `✅ Raça definida com sucesso como *${racaF}*!` });
-                    } 
-                    else if (subOpcao === 'familia' || subOpcao === 'família') {
-                        const fams = ['Tomioka', 'Kamado', 'Kanroji', 'Tokito'];
-                        const encontrada = fams.find(f => f.toLowerCase() === valor.toLowerCase());
-                        if (!encontrada) {
-                            await sock.sendMessage(remoteJid, { text: `❌ Família inválida! Escolha entre: Tomioka, Kamado, Kanroji ou Tokito.` });
-                            continue;
-                        }
-                        db.prepare('UPDATE jogadores SET familia = ? WHERE jid = ?').run(encontrada, sender);
-                        await sock.sendMessage(remoteJid, { text: `✅ Sua linhagem foi vinculada à família *${encontrada}* com sucesso!` });
+                        usuario.raca = escolha.toLowerCase() === 'oni' ? '👹 Oni' : '👱‍♂️ Humano';
+                        db.usuarios[sender] = usuario;
+                        DB.salvar(db);
+                        await sock.sendMessage(remoteJid, { text: `✅ Sucesso! Agora você é um: *${usuario.raca}*!` });
                     }
                     continue;
                 }
 
-                // Execução de comandos padrões importados
-                if (cmd === '/perfil') { await commandPerfil(sock, remoteJid, sender); continue; }
-                if (cmd === '/loja') { await commandLoja(sock, remoteJid, 'IENES'); continue; }
-
-            } catch (error) { console.error("Erro interno no loop:", error); }
+            } catch (err) { console.error("Erro interno:", err); }
         }
     });
 }
