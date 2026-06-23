@@ -2,9 +2,9 @@
   "name": "ntei-kimetsu-bot",
   "version": "4.0.0",
   "description": "Bot de RPG Kimetsu",
-  "main": "index.js",
+  "main": "app.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node app.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.5.0",
