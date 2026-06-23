@@ -1,27 +1,52 @@
-import db from '../database/connection.js';
+import { CONFIG, OWNER_JID } from '../config/config.js';
 
-export async function authMiddleware(sock, msg, remoteJid, sender) {
-    const ownerJid = process.env.OWNER_JID || '5511999999999@s.whatsapp.net'; // Altere no seu .env depois
-    
-    // 1. É o Dono do Bot (Owner)?
-    const isOwner = sender === ownerJid;
+// Sessões temporárias em memória: jid -> timestamp de expiração
+const sessoesAdmin = new Map();
+const sessoesNtei = new Map();
 
-    // 2. É Administrador do Grupo?
-    let isAdminGroup = false;
-    if (remoteJid.endsWith('@g.us')) {
-        try {
-            const groupMetadata = await sock.groupMetadata(remoteJid);
-            const participants = groupMetadata.participants;
-            const user = participants.find(p => p.id === sender);
-            isAdminGroup = user && (user.admin === 'admin' || user.admin === 'superadmin');
-        } catch (e) {
-            console.error("Erro ao buscar metadados do grupo:", e);
-        }
+function limparExpiradas(mapa) {
+    const agora = Date.now();
+    for (const [jid, expira] of mapa.entries()) {
+        if (expira < agora) mapa.delete(jid);
     }
-
-    return {
-        isOwner,
-        isAdminGroup,
-        isAllowedAdminCmd: isOwner || isAdminGroup
-    };
 }
+
+function isDono(jid) {
+    return jid === OWNER_JID;
+}
+
+function abrirSessaoAdmin(jid) {
+    sessoesAdmin.set(jid, Date.now() + CONFIG.sessaoDuracaoMs);
+}
+
+function abrirSessaoNtei(jid) {
+    sessoesNtei.set(jid, Date.now() + CONFIG.sessaoDuracaoMs);
+}
+
+function temSessaoAdmin(jid) {
+    limparExpiradas(sessoesAdmin);
+    return isDono(jid) || (sessoesAdmin.has(jid) && sessoesAdmin.get(jid) > Date.now());
+}
+
+function temSessaoNtei(jid) {
+    limparExpiradas(sessoesNtei);
+    return isDono(jid) || (sessoesNtei.has(jid) && sessoesNtei.get(jid) > Date.now());
+}
+
+/**
+ * Retorna o nível de acesso mais alto que o jid possui: 'ntei' | 'admin' | 'user'
+ */
+function nivelDeAcesso(jid) {
+    if (temSessaoNtei(jid)) return 'ntei';
+    if (temSessaoAdmin(jid)) return 'admin';
+    return 'user';
+}
+
+export const Auth = {
+    isDono,
+    abrirSessaoAdmin,
+    abrirSessaoNtei,
+    temSessaoAdmin,
+    temSessaoNtei,
+    nivelDeAcesso
+};
