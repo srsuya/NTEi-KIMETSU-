@@ -1,17 +1,17 @@
 {
-  "name": "tangerina-bot-rpg",
-  "version": "2.0.0",
-  "description": "Tangerina Bot RPG",
-  "main": "src/app.js",
-  "type": "module",
+  "name": "ntei-kimetsu-bot",
+  "version": "4.0.0",
+  "description": "Bot de RPG Kimetsu",
+  "main": "index.js",
   "scripts": {
-    "start": "node src/app.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.9",
+    "@whiskeysockets/baileys": "^6.5.0",
     "better-sqlite3": "^11.0.0",
-    "pino": "^9.2.0",
+    "pino": "^9.0.0",
     "qrcode-terminal": "^0.12.0"
-  }
+  },
+  "author": "N.T.E.I",
+  "license": "ISC"
 }
-
