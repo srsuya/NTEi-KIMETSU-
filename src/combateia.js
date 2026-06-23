@@ -1,11 +1,11 @@
-// combateIA.js - Motor de Batalha e Inteligência Tática Ômega
+// combateIA.js - Motor de Batalha e Inteligência Tática para Banco de Dados JSON
 const fs = require('fs');
 
 /**
- * Filtra e guarda perfeitamente o bloco com os 18 cards enviados
+ * Filtra e organiza as linhas de cards enviados pelo usuário
  */
 function processarEGuardarCards(textoCards) {
-    if (!textoCards) return "[]";
+    if (!textoCards) return "";
     const linhas = textoCards.split('\n');
     let cardsValidos = [];
     
@@ -14,57 +14,48 @@ function processarEGuardarCards(textoCards) {
             cardsValidos.push(linha.trim());
         }
     });
-    return JSON.stringify(cardsValidos);
+    return cardsValidos.join('\n');
 }
 
 /**
- * IA que gera estratégias e executa movimentos com base nos cards salvos e na dificuldade
+ * IA que gera estratégias e simula movimentos com base no inventário textual de cards
  */
-function calcularMovimentoIA(cardsJogadorJSON, dificuldade) {
+function calcularMovimentoIA(cardsTexto, dificuldade) {
     let cardsDisponiveis = [];
-    try {
-        cardsDisponiveis = JSON.parse(cardsJogadorJSON || '[]');
-    } catch (e) {
-        cardsDisponiveis = [];
+    if (cardsTexto && cardsTexto.trim().length > 0) {
+        cardsDisponiveis = cardsTexto.split('\n');
     }
 
-    // Ataques padrão caso o jogador ainda não tenha ensinado nada ao bot
+    // Ataques padrão caso o jogador não tenha ensinado nada ao bot ainda
     if (cardsDisponiveis.length === 0) {
         cardsDisponiveis = [
             "⚔️ [ATAQUE] Corte Rápido Focado - Dano: 120",
             "🛡️ [DEFESA] Postura de Bloqueio Absoluto - Absorção: 100",
-            "💨 [ESQUIVA] Movimento Lateral Fluido - Stamina: -20"
+            "💨 [ESQUIVA] Movimento Lateral Fluido"
         ];
     }
 
-    // O bot seleciona um card simulando consciência tática
     let cardEscolhido = cardsDisponiveis[Math.floor(Math.random() * cardsDisponiveis.length)];
     let estrategia = "Equilibrada";
-    let multiplicadorDano = 1.0;
 
     switch (dificuldade.toLowerCase()) {
         case 'facil':
-            multiplicadorDano = 0.7;
             estrategia = "Defensiva Simples (Comete erros propositais)";
             break;
         case 'medio':
-            multiplicadorDano = 1.0;
             estrategia = "Análise Adaptativa Básica (Lê padrões comuns)";
             break;
         case 'dificil':
-            multiplicadorDano = 1.4;
             estrategia = "Contra-Ataque Avançado (Punição severa)";
             break;
         case 'impossivel':
-            multiplicadorDano = 2.5;
-            estrategia = "🔮 CONSCIÊNCIA ÔMEGA (Antecipa os 18 cards e pune com combo fatal)";
+            estrategia = "🔮 CONSCIÊNCIA ÔMEGA (Antecipa os 18 cards e aplica combo fatal)";
             break;
     }
 
     return {
         card: cardEscolhido,
-        estrategia: estrategia,
-        multiplicador: multiplicadorDano
+        estrategia: estrategia
     };
 }
 
