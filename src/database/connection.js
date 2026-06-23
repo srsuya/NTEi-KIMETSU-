@@ -1,68 +1,77 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+=== rpg/perfil.js ===
+import db from '../../database/connection.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dbPath = path.resolve(__dirname, '../../database_json.json');
+export async function commandPerfil(sock, remoteJid, sender) {
+    // Garante que o JID seja buscado perfeitamente no simulador JSON
+    const jogador = db.prepare('select * from jogadores where jid = ?').get(sender);
 
-// Inicializa o arquivo JSON caso ele não exista
-if (!fs.existsSync(dbPath)) {
-    fs.writeFileSync(dbPath, JSON.stringify({ jogadores: [], inventario: [], compras: [], itens_loja: [] }, null, 2));
+    if (!jogador) {
+        await sock.sendMessage(remoteJid, { 
+            text: `❌ *Você não possui um registro!* Envie sua *📃 Ficha de Recrutamento* para começar.` 
+        });
+        return;
+    }
+
+    // Design Visual Limpo e Profissional no WhatsApp
+    const fichaVisual = 
+        `🍊 *STATUS DO GUERREIRO* 🍊\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `👤 *Nick:* ${jogador.nick}\n` +
+        `🆔 *ID RPG:* #${jogador.id_rpg}\n` +
+        `🧬 *Raça:* ${jogador.raca === 'Humano' ? '👱🏻‍♂️ Humano' : '👹 Oni'}\n` +
+        `🎖️ *Patente:* ${jogador.patente}\n` +
+        `🏡 *Vila:* ${jogador.vila}\n` +
+        `♌ *Família:* ${jogador.familia}\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `🩸 *HP:* [ ${jogador.hp} / ${jogador.max_hp} ]\n` +
+        `⚡ *Chakra:* [ ${jogador.chakra} / ${jogador.max_chakra} ]\n` +
+        `✨ *XP Atual:* ${jogador.xp}\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `💰 *FINANÇAS* 💰\n` +
+        `💵 *Ienes:* 💰 ${jogador.ienes}\n` +
+        `🎐 *Fichas:* 🎐 ${jogador.fichas}\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `🎒 *Inventário:* /inventario\n` +
+        `⚔️ *Técnicas:* /tecnicas\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━`;
+
+    await sock.sendMessage(remoteJid, { text: fichaVisual });
+}
+=== shop/shopCmds.js ===
+import { ShopService } from '../../services/shop.js';
+
+export async function commandLoja(sock, remoteJid, moeda = 'IENES') {
+    const itens = ShopService.listarItens(moeda);
+    const titulo = moeda === 'IENES' ? '💰 LOJA DE IENES' : '🎐 LOJA DE FICHAS';
+    
+    let menu = `🍊 *${titulo}* 🍊\n`;
+    menu += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+    menu += `Para adquirir, utilize: /comprar Nome do Item\n\n`;
+
+    itens.forEach(item => {
+        const limiteStr = item.limite === -1 ? 'Infinito' : `${item.limite}x`;
+        menu += `🔹 *${item.nome}*\n`;
+        menu += `» Preço: ${item.preco} ${item.moeda === 'IENES' ? '💰' : '🎐'}\n`;
+        menu += `» Raça: ${item.restricao_raca}\n`;
+        menu += `» Limite: ${limiteStr}\n`;
+        menu += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+    });
+
+    await sock.sendMessage(remoteJid, { text: menu });
 }
 
-// Helper para ler e salvar os dados de forma síncrona
-const readData = () => JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
-const writeData = (data) => fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
+export async function commandComprar(sock, remoteJid, sender, itemNome) {
+    if (!itemNome) {
+        await sock.sendMessage(remoteJid, { text: '❌ Informe o nome do item. Exemplo: `/comprar 🎴 Brinco do Tanjiro`' });
+        return;
+    }
 
-const db = {
-    prepare: (sql) => {
-        const sqlClean = sql.toLowerCase().replace(/\s+/g, ' ').trim();
+    const resultado = ShopService.comprarItem(sender, itemNome.trim());
+    if (resultado.success) {
+        await sock.sendMessage(remoteJid, { text: `🎉 Compra realizada com sucesso! O item *${itemNome}* foi enviado ao seu /inventario.` });
+    } else {
+        await sock.sendMessage(remoteJid, { text: `❌ Falha na compra: ${resultado.error}` });
+    }
+}
 
-        return {
-            get: (...params) => {
-                const data = readData();
-                if (sqlClean.includes('from jogadores where jid = ?') || sqlClean.includes('from jogadores where jid=?')) {
-                    return data.jogadores.find(j => j.jid === params[0]) || null;
-                }
-                if (sqlClean.includes('from jogadores where id_rpg = ?')) {
-                    return data.jogadores.find(j => j.id_rpg == params[0]) || null;
-                }
-                if (sqlClean.includes('max(id_rpg)')) {
-                    if (data.jogadores.length === 0) return { id: 1000 };
-                    const maxId = Math.max(...data.jogadores.map(j => j.id_rpg || 1000));
-                    return { id: maxId };
-                }
-                return null;
-            },
-            run: (...params) => {
-                const data = readData();
-                if (sqlClean.includes('insert into jogadores')) {
-                    const novoJogador = {
-                        jid: params[0], id_rpg: params[1], nick: params[2],
-                        raca: params[3], patente: params[4], familia: params[5], vila: params[6],
-                        hp: 100, max_hp: 100, chakra: 100, max_chakra: 100, xp: 0, ienes: 0, fichas: 0
-                    };
-                    data.jogadores.push(novoJogador);
-                    writeData(data);
-                    return { changes: 1 };
-                }
-                if (sqlClean.includes('update jogadores set patente = ?')) {
-                    const jog = data.jogadores.find(j => j.id_rpg == params[1]);
-                    if (jog) { jog.patente = params[0]; writeData(data); return { changes: 1 }; }
-                }
-                return { changes: 0 };
-            },
-            all: (...params) => {
-                const data = readData();
-                if (sqlClean.includes('select * from itens_loja')) {
-                    return data.itens_loja.filter(i => i.moeda === params[0]);
-                }
-                return [];
-            }
-        };
-    },
-    exec: (sql) => Promise.resolve(),
-    transaction: (fn) => () => fn()
-};
-
-export default db;
+Ver connection.js e migrations
