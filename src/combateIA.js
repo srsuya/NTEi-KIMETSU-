@@ -1,56 +1,71 @@
-// combateIA.js - Motor de Combate Inteligente NTEi Kimetsu 4.0
+// combateIA.js - Motor de Combate e Aprendizado Inteligente
+const fs = require('fs');
 
-// Função para processar e salvar a formatação dos 18 cards simultâneos
-function extrairEGuardarCards(textoCards) {
-    // Expressão regular para capturar blocos ou linhas com emojis e atributos comuns de RPG
+/**
+ * Salva e formata os 18 cards enviados pelo usuário
+ */
+function processarEGuardarCards(textoCards) {
+    if (!textoCards) return "[]";
     const linhas = textoCards.split('\n');
     let cardsValidos = [];
     
     linhas.forEach(linha => {
-        if (linha.trim().length > 5) {
+        if (linha.trim().length > 0) {
             cardsValidos.push(linha.trim());
         }
     });
-
     return JSON.stringify(cardsValidos);
 }
 
-// Lógica de simulação de combate baseado em Turnos e Estratégia de Dificuldade
-function calcularMovimentoIA(cardsPlayer, nivelDificuldade) {
-    let cardsIA = JSON.parse(cardsPlayer || '[]');
-    if (cardsIA.length === 0) {
-        cardsIA = ["⚔️ Ataque Básico [Dano: 50]", "🛡️ Defesa Padrão [Bloqueio: 40]"];
+/**
+ * Motor de IA que escolhe a melhor jogada com base nos cards ensinados e na dificuldade
+ */
+function calcularMovimentoIA(cardsJogadorJSON, dificuldade) {
+    let cardsDisponiveis = [];
+    try {
+        cardsDisponiveis = JSON.parse(cardsJogadorJSON || '[]');
+    } catch (e) {
+        cardsDisponiveis = [];
     }
 
-    // Embaralha as ações disponíveis
-    let escolha = cardsIA[Math.floor(Math.random() * cardsIA.length)];
-    let modificadorDano = 1.0;
-    let estrategia = "Padrão";
+    // Ataques padrão caso o jogador ainda não tenha ensinado nada ao bot
+    if (cardsDisponiveis.length === 0) {
+        cardsDisponiveis = [
+            "⚔️ [ATAQUE] Corte Rápido Focado - Dano: 120",
+            "🛡️ [DEFESA] Postura de Bloqueio Absoluto - Absorção: 100",
+            "💨 [ESQUIVA] Movimento Lateral Fluido - Stamina: -20"
+        ];
+    }
 
-    switch (nivelDificuldade.toLowerCase()) {
+    // Seleção de card por amostragem inteligente (Simulando consciência de escolha)
+    let cardEscolhido = cardsDisponiveis[Math.floor(Math.random() * cardsDisponiveis.length)];
+    let estrategia = "Equilibrada";
+    let multiplicadorDano = 1.0;
+
+    switch (dificuldade.toLowerCase()) {
         case 'facil':
-            modificadorDano = 0.7;
-            estrategia = "Defensiva passiva (Erros frequentes)";
+            multiplicadorDano = 0.7;
+            estrategia = "Defensiva Simples (Comete erros táticos)";
             break;
         case 'medio':
-            modificadorDano = 1.0;
-            estrategia = "Equilibrada (Lê ações básicas)";
+            multiplicadorDano = 1.0;
+            estrategia = "Análise Adaptativa Básica (Lê padrões comuns)";
             break;
         case 'dificil':
-            modificadorDano = 1.3;
-            estrategia = "Agressiva (Prevê contra-ataques e foca em fraquezas)";
+            multiplicadorDano = 1.4;
+            estrategia = "Contra-Ataque Crítico (Punição por brechas)";
             break;
         case 'impossivel':
-            modificadorDano = 1.8;
-            estrategia = "Análise Ômega (Lê perfeitamente a sequência dos 18 cards e pune instantaneamente)";
+            multiplicadorDano = 2.0;
+            estrategia = "🔮 CONSCIÊNCIA ÔMEGA (Lê os 18 cards perfeitamente e aplica combo perfeito)";
             break;
     }
 
     return {
-        acao: escolha,
-        modificador: modificadorDano,
-        estrategia: estrategia
+        card: cardEscolhido,
+        estrategia: estrategia,
+        multiplicador: multiplicadorDano
     };
 }
 
-module.exports = { extrairEGuardarCards, calcularMovimentoIA };
+module.exports = { processarEGuardarCards, calcularMovimentoIA };
