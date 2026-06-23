@@ -1,8 +1,8 @@
-// combateIA.js - Motor de Combate e Aprendizado Inteligente
+// combateIA.js - Motor de Batalha e Inteligência Tática Ômega
 const fs = require('fs');
 
 /**
- * Salva e formata os 18 cards enviados pelo usuário
+ * Filtra e guarda perfeitamente o bloco com os 18 cards enviados
  */
 function processarEGuardarCards(textoCards) {
     if (!textoCards) return "[]";
@@ -18,7 +18,7 @@ function processarEGuardarCards(textoCards) {
 }
 
 /**
- * Motor de IA que escolhe a melhor jogada com base nos cards ensinados e na dificuldade
+ * IA que gera estratégias e executa movimentos com base nos cards salvos e na dificuldade
  */
 function calcularMovimentoIA(cardsJogadorJSON, dificuldade) {
     let cardsDisponiveis = [];
@@ -37,7 +37,7 @@ function calcularMovimentoIA(cardsJogadorJSON, dificuldade) {
         ];
     }
 
-    // Seleção de card por amostragem inteligente (Simulando consciência de escolha)
+    // O bot seleciona um card simulando consciência tática
     let cardEscolhido = cardsDisponiveis[Math.floor(Math.random() * cardsDisponiveis.length)];
     let estrategia = "Equilibrada";
     let multiplicadorDano = 1.0;
@@ -45,7 +45,7 @@ function calcularMovimentoIA(cardsJogadorJSON, dificuldade) {
     switch (dificuldade.toLowerCase()) {
         case 'facil':
             multiplicadorDano = 0.7;
-            estrategia = "Defensiva Simples (Comete erros táticos)";
+            estrategia = "Defensiva Simples (Comete erros propositais)";
             break;
         case 'medio':
             multiplicadorDano = 1.0;
@@ -53,11 +53,11 @@ function calcularMovimentoIA(cardsJogadorJSON, dificuldade) {
             break;
         case 'dificil':
             multiplicadorDano = 1.4;
-            estrategia = "Contra-Ataque Crítico (Punição por brechas)";
+            estrategia = "Contra-Ataque Avançado (Punição severa)";
             break;
         case 'impossivel':
-            multiplicadorDano = 2.0;
-            estrategia = "🔮 CONSCIÊNCIA ÔMEGA (Lê os 18 cards perfeitamente e aplica combo perfeito)";
+            multiplicadorDano = 2.5;
+            estrategia = "🔮 CONSCIÊNCIA ÔMEGA (Antecipa os 18 cards e pune com combo fatal)";
             break;
     }
 
