@@ -22,6 +22,7 @@ import { iniciarBackupAutomatico, realizarBackup } from './services/backup.js';
 // ─── COMMANDS ────────────────────────────────────────────
 import { commandPerfil }            from './commands/rpg/perfil.js';
 import { commandInventario, commandSalvarInventario } from './commands/rpg/inventario.js';
+import { commandTecnicas }          from './commands/rpg/tecnicas.js'; 
 import { commandFamilias, commandEscolherFamilia }    from './commands/rpg/familias.js';
 import { commandTransferir, commandRemoverTransferencia, commandExtrato } from './commands/economia/transferencias.js';
 import {
@@ -53,10 +54,28 @@ const rl = readline.createInterface({ input: process.stdin, output: process.stdo
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
 // ══════════════════════════════════════════════════════════
-//   INICIALIZAÇÃO
+//   INICIALIZAÇÃO & MIGRAÇÕES DE SEGURANÇA
 // ══════════════════════════════════════════════════════════
 runAllMigrations();
 iniciarBackupAutomatico();
+
+// Garante que a coluna de texto do inventário e a data existem na tabela jogadores
+try { db.prepare('ALTER TABLE jogadores ADD COLUMN inventario TEXT DEFAULT ""').run(); } catch(e) {}
+try { db.prepare('ALTER TABLE jogadores ADD COLUMN atualizado_em TEXT DEFAULT ""').run(); } catch(e) {}
+
+// Garante que a tabela da loja (itens_loja) e suas colunas estejam criadas
+try {
+    db.prepare(`
+        CREATE TABLE IF NOT EXISTS itens_loja (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT UNIQUE,
+            preco INTEGER,
+            moeda TEXT,
+            restric_raca TEXT DEFAULT "Ambos",
+            descricao TEXT
+        )
+    `).run();
+} catch(e) {}
 
 // ══════════════════════════════════════════════════════════
 //   CONEXÃO
@@ -111,7 +130,7 @@ async function connectToWhatsApp() {
         if (connection === 'open') {
             tentativas = 0;
             logger.success('🍊 Kimetsu New Age 4.0 — BOT CONECTADO!');
-            realizarBackup(); // Backup ao conectar
+            realizarBackup();
         }
         if (connection === 'close') {
             const statusCode  = lastDisconnect?.error?.output?.statusCode;
@@ -144,7 +163,7 @@ async function connectToWhatsApp() {
                 const sender    = msg.key.participant || remoteJid;
                 const text      = extractText(msg);
                 const isGroup   = remoteJid?.endsWith('@g.us') ?? false;
-                const nivel     = getNivel(sender, OWNER_JID);
+                const nivel      = getNivel(sender, OWNER_JID);
 
                 if (!text) continue;
                 logger.debug(`[MSG] ${sender.split('@')[0]}: "${text.substring(0, 80)}"`);
@@ -208,9 +227,7 @@ async function connectToWhatsApp() {
                     continue;
                 }
 
-                // ══════════════════════════════════════════
-                //   ROTEADOR DE COMANDOS
-                // ══════════════════════════════════════════
+                // ─── ROTEADOR DE COMANDOS ──────────────────
                 const [cmd, ...argsParts] = text.split(' ');
                 const args = argsParts.join(' ');
                 const cmdL = cmd.toLowerCase();
@@ -234,6 +251,7 @@ async function connectToWhatsApp() {
                     case '/perfil':      await commandPerfil(sock, remoteJid, sender); break;
                     case '/inventario':  await commandInventario(sock, remoteJid, sender); break;
                     case '/salvarinventario': await commandSalvarInventario(sock, remoteJid, sender, args); break;
+                    case '/tecnicas':    await commandTecnicas(sock, remoteJid, sender); break; 
                     case '/familias':    await commandFamilias(sock, remoteJid); break;
                     case '/escolherfamilia': await commandEscolherFamilia(sock, remoteJid, sender, args); break;
 
@@ -332,7 +350,6 @@ async function connectToWhatsApp() {
                                 text: `⚠️ Este comando ainda não foi implementado.\n\nUse */menu* para ver os comandos disponíveis.`
                             });
                         }
-                        // Detectar cards enviados sem comando
                         else if (text.includes('Nome:') && (text.includes('Tipo:') || text.includes('Dano:'))) {
                             await commandLerCards(sock, remoteJid, sender, text);
                         }
