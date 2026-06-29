@@ -1,36 +1,36 @@
-// src/commands/rpg/inventario.js
 import db from '../../database/connection.js';
+import { logDB, BORDA_TOPO, BORDA_BOT, TITULO } from '../../utils/helpers.js';
 
 export async function commandInventario(sock, remoteJid, sender) {
-    // 1. Verifica se o jogador existe
-    const jogador = db.prepare('SELECT nick FROM jogadores WHERE jid = ?').get(sender);
-    if (!jogador) {
-        await sock.sendMessage(remoteJid, { text: '❌ Você não possui um registro! Envie sua ficha primeiro.' });
+    const j = db.prepare('SELECT * FROM jogadores WHERE jid = ?').get(sender);
+    if (!j) {
+        await sock.sendMessage(remoteJid, { text: `❌ Você não tem perfil cadastrado!` });
         return;
     }
+    const inv = j.inventario?.trim() || '_vazio_';
+    await sock.sendMessage(remoteJid, {
+        text:
+`${BORDA_TOPO}
+${TITULO}
+      🎒 *INVENTÁRIO DE ${j.nick}* 🎒
 
-    // 2. Busca os itens que o jogador comprou (tabela 'compras' que está na sua migração)
-    // Agrupamos por item para mostrar a quantidade total de cada um
-    const itens = db.prepare(`
-        SELECT item_nome, SUM(quantidade) as total 
-        FROM compras 
-        WHERE jogador_jid = ? 
-        GROUP BY item_nome
-    `).all(sender);
+${inv}
+${BORDA_BOT}`
+    });
+}
 
-    let msgInventario = `🎒 *INVENTÁRIO DE ${jogador.nick.toUpperCase()}* 🎒\n`;
-    msgInventario += `━━━━━━━━━━━━━━━━━━━━━━\n`;
-
-    if (itens.length === 0) {
-        msgInventario += `📦 *Seu inventário está totalmente vazio!*\n`;
-        msgInventario += `Visite a loja usando */loja* para comprar equipamentos.\n`;
-    } else {
-        itens.forEach(item => {
-            msgInventario += `🔹 *${item.item_nome}* x${item.total}\n`;
-        });
+export async function commandSalvarInventario(sock, remoteJid, sender, texto) {
+    const j = db.prepare('SELECT * FROM jogadores WHERE jid = ?').get(sender);
+    if (!j) {
+        await sock.sendMessage(remoteJid, { text: `❌ Você não tem perfil cadastrado!` });
+        return;
     }
-    
-    msgInventario += `━━━━━━━━━━━━━━━━━━━━━━`;
-
-    await sock.sendMessage(remoteJid, { text: msgInventario });
+    if (!texto) {
+        await sock.sendMessage(remoteJid, { text: `❌ Use: */salvarinventario [conteúdo]*` });
+        return;
+    }
+    db.prepare(`UPDATE jogadores SET inventario = ?, atualizado_em = datetime('now','localtime') WHERE jid = ?`)
+      .run(texto, sender);
+    logDB('inventario', sender, sender, `Salvo: ${texto.substring(0, 50)}`);
+    await sock.sendMessage(remoteJid, { text: `✅ Inventário de *${j.nick}* atualizado com sucesso!` });
 }
