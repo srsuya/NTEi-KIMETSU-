@@ -1,55 +1,44 @@
+// src/services/shop.js
 import db from '../database/connection.js';
-import { EconomyService } from './economy.js';
 
-export class ShopService {
-    static listarItens(moeda) {
+export const ShopService = {
+    listarItens(moeda) {
         return db.prepare('SELECT * FROM itens_loja WHERE moeda = ?').all(moeda);
-    }
+    },
 
-    static comprarItem(jid, itemNome) {
-        const transacao = db.transaction(() => {
-            // 1. Pega os dados do jogador
-            const jogador = db.prepare('SELECT * FROM jogadores WHERE jid = ?').get(jid);
-            if (!jogador) throw new Error('Jogador não registrado.');
+    comprarItem(sender, itemNome) {
+        const item = db.prepare('SELECT * FROM itens_loja WHERE nome = ?').get(itemNome);
+        if (!item) return { success: false, error: 'Este item não existe na loja.' };
 
-            // 2. Pega os dados do item da loja
-            const item = db.prepare('SELECT * FROM itens_loja WHERE nome = ?').get(itemNome);
-            if (!item) throw new Error('Item não encontrado na loja.');
+        const jogador = db.prepare('SELECT * FROM jogadores WHERE jid = ?').get(sender);
+        if (!jogador) return { success: false, error: 'Você não possui um registro.' };
 
-            // 3. Validação de Restrição de Raça
-            if (item.restricao_raca !== 'Ambos' && item.restricao_raca !== jogador.raca) {
-                throw new Error(`Este item é exclusivo para a raça ${item.restricao_raca}.`);
-            }
-
-            // 4. Validação de Limites de Compra
-            if (item.limite !== -1) {
-                const jaComprado = db.prepare('SELECT SUM(quantidade) as total FROM compras WHERE jogador_jid = ? AND item_nome = ?').get(jid, itemNome);
-                if (jaComprado && jaComprado.total >= item.limite) {
-                    throw new Error(`Você já atingiu o limite de compra deste item (${item.limite}).`);
-                }
-            }
-
-            // 5. Cobrança de Saldo via EconomyService
-            const cobranca = EconomyService.alterarSaldo(jid, item.moeda, item.preco, 'REMOVE', `Compra de ${item.nome}`);
-            if (!cobranca.success) throw new Error(cobranca.error || 'Saldo insuficiente.');
-
-            // 6. Entrega do Item no Inventário do Jogador
-            const itemInventario = db.prepare('SELECT * FROM inventario WHERE jogador_jid = ? AND item_nome = ?').get(jid, itemNome);
-            if (itemInventario) {
-                db.prepare('UPDATE inventario SET quantidade = quantidade + 1 WHERE id = ?').run(itemInventario.id);
-            } else {
-                db.prepare('INSERT INTO inventario (jogador_jid, item_nome, quantidade) VALUES (?, ?, 1)').run(jid, itemNome);
-            }
-
-            // 7. Registra no Histórico de Compras
-            db.prepare('INSERT INTO compras (jogador_jid, item_nome, quantidade) VALUES (?, ?, 1)').run(jid, itemNome);
-        });
-
-        try {
-            transacao();
-            return { success: true };
-        } catch (error) {
-            return { success: false, error: error.message };
+        if (item.restricao_raca !== 'Ambos' && item.restricao_raca !== jogador.raca) {
+            return { success: false, error: `Exclusivo para a raça ${item.restricao_raca}.` };
         }
+
+        // Verifica o saldo
+        if (item.moeda === 'IENES') {
+            if (jogador.ienes < item.preco) return { success: false, error: `Ienes insuficientes. Preço: 💰 ${item.preco}` };
+            db.prepare('UPDATE jogadores SET ienes = ienes - ? WHERE jid = ?').run(item.preco, sender);
+        } else {
+            if (jogador.fichas < item.preco) return { success: false, error: `Fichas insuficientes. Preço: 🎐 ${item.preco}` };
+            db.prepare('UPDATE jogadores SET fichas = fichas - ? WHERE jid = ?').run(item.preco, sender);
+        }
+
+        // LÓGICA DO INVENTÁRIO EM TEXTO:
+        // Pega o texto atual do inventário e adiciona o novo item que foi comprado numa linha abaixo
+        let invAtual = jogador.inventario?.trim() || '';
+        if (invAtual === '' || invAtual === '_vazio_') {
+            invAtual = `🔹 ${item.nome}`;
+        } else {
+            invAtual = `${invAtual}\n🔹 ${item.nome}`;
+        }
+
+        // Salva o texto atualizado de volta no jogador
+        db.prepare(`UPDATE jogadores SET inventario = ?, atualizado_em = datetime('now','localtime') WHERE jid = ?`)
+          .run(invAtual, sender);
+
+        return { success: true };
     }
-}
+};
