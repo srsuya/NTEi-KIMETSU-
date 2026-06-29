@@ -1,17 +1,21 @@
 {
-  "name": "ntei-kimetsu-bot",
+  "name": "kimetsu-new-age-4",
   "version": "4.0.0",
-  "description": "Bot de RPG Kimetsu",
+  "description": "Kimetsu New Age RPG Bot para WhatsApp",
+  "type": "module",
   "main": "app.js",
   "scripts": {
-    "start": "node app.js"
+    "start": "node app.js",
+    "dev": "node --watch app.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.5.0",
-    "better-sqlite3": "^11.0.0",
-    "pino": "^9.0.0",
-    "qrcode-terminal": "^0.12.0"
+    "@whiskeysockets/baileys": "^6.7.9",
+    "better-sqlite3": "^9.4.3",
+    "pino": "^8.19.0",
+    "qrcode-terminal": "^0.12.0",
+    "node-cron": "^3.0.3"
   },
-  "author": "N.T.E.I",
-  "license": "ISC"
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }
